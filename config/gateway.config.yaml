@@ -1,0 +1,19 @@
+# RouteX Gateway Default Configuration
+
+server:
+  port: 8080
+  host: 0.0.0.0
+  requestTimeoutMs: 10000
+  headersTimeoutMs: 11000
+  maxHeaderSize: 16384
+  trustedProxies:
+    - 127.0.0.1
+    - ::1
+  logLevel: info
+  logFormat: json
+
+redis:
+  host: localhost
+  port: 6379
+  db: 0
+  connectTimeoutMs: 3000

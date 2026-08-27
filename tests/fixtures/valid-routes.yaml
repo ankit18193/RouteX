@@ -1,0 +1,40 @@
+routes:
+  - id: test_service_1
+    pathPrefix: /test/v1
+    upstream: http://localhost:5001
+    stripPrefix: true
+    methods:
+      - GET
+      - POST
+    auth:
+      mode: jwt
+      requiredRoles:
+        - admin
+    rateLimit:
+      enabled: true
+      windowSec: 30
+      limit: 50
+      failurePolicy: fail-closed
+      tiers:
+        standard: 50
+        pro: 200
+    timeouts:
+      connectTimeoutMs: 500
+      responseTimeoutMs: 1500
+
+  - id: test_service_2
+    pathPrefix: /public
+    upstream: https://api.example.com
+    stripPrefix: false
+    methods:
+      - GET
+    auth:
+      mode: public
+    rateLimit:
+      enabled: false
+      windowSec: 60
+      limit: 100
+      failurePolicy: fail-open
+    timeouts:
+      connectTimeoutMs: 1000
+      responseTimeoutMs: 2000

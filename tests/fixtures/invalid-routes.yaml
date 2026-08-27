@@ -1,0 +1,15 @@
+routes:
+  - id: duplicate_id
+    pathPrefix: invalid-path-without-leading-slash
+    upstream: not-a-valid-url
+    methods:
+      - INVALID_METHOD
+    auth:
+      mode: invalid-mode
+    timeouts:
+      connectTimeoutMs: 10
+      responseTimeoutMs: 10
+
+  - id: duplicate_id
+    pathPrefix: /test2
+    upstream: http://localhost:5002

@@ -1,0 +1,69 @@
+# ==============================================================================
+# RouteX - Production .gitignore
+# ==============================================================================
+
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build & Compilation Output
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# Test & Code Coverage Artifacts
+coverage/
+.nyc_output/
+.vitest/
+*.lcov
+
+# Environment Variables & Secrets
+.env
+.env.*
+!.env.example
+
+# Logs & Diagnostics
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Runtime, Temporary & Scratch Files
+*.pid
+*.pid.lock
+*.seed
+tmp/
+temp/
+
+# Cache Directories
+.cache/
+.eslintcache
+.parcel-cache
+
+# IDE & Editor Directories
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*.sublime-workspace
+*.sublime-project
+
+# Operating System Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Docker & Local Overrides (preserve Dockerfile and docker-compose.yml)
+docker-compose.override.yml
+.docker/

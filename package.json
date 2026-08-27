@@ -1,0 +1,45 @@
+{
+  "name": "routex",
+  "version": "0.1.0",
+  "description": "Production-grade API Gateway and Reverse Proxy built with Node.js and TypeScript",
+  "type": "module",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "keywords": [
+    "api-gateway",
+    "reverse-proxy",
+    "fastify",
+    "typescript",
+    "redis",
+    "rate-limiting",
+    "streaming"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "fastify": "^5.2.1",
+    "ioredis": "^5.6.0",
+    "pino": "^9.6.0",
+    "undici": "^7.4.0",
+    "yaml": "^2.7.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.9",
+    "@vitest/coverage-v8": "^3.0.8",
+    "pino-pretty": "^13.0.0",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.8"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

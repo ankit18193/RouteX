@@ -1,0 +1,17 @@
+server:
+  port: 8888
+  host: 0.0.0.0
+  logLevel: info
+
+redis:
+  host: 127.0.0.1
+  port: 6379
+
+routes:
+  - id: embedded_route_1
+    pathPrefix: /embedded/v1
+    upstream: http://localhost:7001
+    methods:
+      - GET
+    auth:
+      mode: public
