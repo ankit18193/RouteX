@@ -5,3 +5,4 @@ export * from './logger/index.js';
 export * from './utils/index.js';
 export * from './proxy/index.js';
 export * from './server/index.js';
+export * from './auth/index.js';
