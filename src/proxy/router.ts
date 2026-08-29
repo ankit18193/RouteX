@@ -94,11 +94,7 @@ export class ProxyRouter {
       if (route.pathPrefix === '/') {
         remainingPath = pathname;
       } else {
-        const stripped = pathname.slice(route.pathPrefix.length);
-        remainingPath = stripped.startsWith('/') ? stripped : `/${stripped}`;
-        if (remainingPath === '') {
-          remainingPath = '/';
-        }
+        remainingPath = pathname.slice(route.pathPrefix.length);
       }
     }
 
@@ -107,7 +103,11 @@ export class ProxyRouter {
       ? route.upstream.slice(0, -1)
       : route.upstream;
 
-    const pathPart = remainingPath.startsWith('/') ? remainingPath : `/${remainingPath}`;
+    let pathPart = '';
+    if (remainingPath !== '' && remainingPath !== '/') {
+      pathPart = remainingPath.startsWith('/') ? remainingPath : `/${remainingPath}`;
+    }
+
     const cleanSearch = search.startsWith('?') || search === '' ? search : `?${search}`;
     const targetUrl = `${upstreamBase}${pathPart}${cleanSearch}`;
 
@@ -115,7 +115,7 @@ export class ProxyRouter {
       matched: true,
       route,
       targetUrl,
-      remainingPath,
+      remainingPath: remainingPath === '' ? '/' : remainingPath,
     };
   }
 

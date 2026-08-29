@@ -1,0 +1,225 @@
+import fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
+import type { GatewayConfig } from '../types/index.js';
+import { ProxyRouter } from '../proxy/router.js';
+import { UpstreamPoolManager } from '../proxy/pool.js';
+import { handleProxyStream } from '../proxy/stream-handler.js';
+import { createLogger, logAccess } from '../logger/logger.js';
+import { normalizeRequestId } from '../utils/uuid.js';
+import { calculateLatencyBreakdown } from '../utils/timing.js';
+import {
+  createErrorEnvelope,
+  GatewayError,
+  GatewayErrorCode,
+  RouteNotFoundError,
+} from '../errors/index.js';
+
+declare module 'fastify' {
+  interface FastifyRequest {
+    reqId: string;
+    startTime: bigint;
+  }
+}
+
+export interface GatewayServerOptions {
+  readonly logger?: boolean | undefined;
+}
+
+export class RouteXGatewayServer {
+  private readonly app: FastifyInstance;
+  private readonly router: ProxyRouter;
+  private readonly poolManager: UpstreamPoolManager;
+  private isRunning = false;
+
+  constructor(
+    public readonly config: GatewayConfig,
+    options: GatewayServerOptions = {}
+  ) {
+    const logger = createLogger({
+      level: config.server.logLevel,
+      format: config.server.logFormat,
+      name: 'routex-gateway',
+    });
+
+    this.app = fastify({
+      logger: options.logger ?? false,
+      requestTimeout: config.server.requestTimeoutMs,
+      routerOptions: {
+        maxParamLength: 2048,
+      },
+    });
+
+    this.router = new ProxyRouter(config.routes);
+    this.poolManager = new UpstreamPoolManager({
+      connectTimeoutMs: 5000,
+      headersTimeoutMs: config.server.headersTimeoutMs,
+      bodyTimeoutMs: config.server.requestTimeoutMs,
+    });
+
+    this.setupMiddleware();
+    this.setupRoutes(logger);
+  }
+
+  private setupMiddleware(): void {
+    // 1. Zero-buffer stream payload content-type parsers
+    this.app.addContentTypeParser('application/octet-stream', (_req, payload, done) => {
+      done(null, payload);
+    });
+    this.app.addContentTypeParser('*', { parseAs: 'buffer' }, (_req, payload, done) => {
+      done(null, payload);
+    });
+
+    // 2. Request initialisation hook: correlation ID & timer
+    this.app.addHook('onRequest', async (req: FastifyRequest, reply: FastifyReply) => {
+      const incomingReqId = req.headers['x-request-id'];
+      const requestId = normalizeRequestId(incomingReqId);
+
+      req.reqId = requestId;
+      req.startTime = process.hrtime.bigint();
+
+      reply.header('x-request-id', requestId);
+    });
+
+    // 3. Global error handler
+    this.app.setErrorHandler((error, req, reply) => {
+      const requestId = req.reqId ?? 'req_unknown';
+      const envelopeResponse = createErrorEnvelope(error, requestId);
+
+      for (const [key, val] of Object.entries(envelopeResponse.headers)) {
+        reply.header(key, val);
+      }
+      reply.status(envelopeResponse.statusCode).send(envelopeResponse.envelope);
+    });
+  }
+
+  private setupRoutes(rootLogger: ReturnType<typeof createLogger>): void {
+    // Health check endpoint for gateway itself
+    this.app.get('/gateway/healthz', async () => {
+      return {
+        status: 'ok',
+        gateway: 'RouteX',
+        timestamp: new Date().toISOString(),
+        uptimeSec: Math.floor(process.uptime()),
+      };
+    });
+
+    // Catch-all reverse proxy dispatcher
+    this.app.all('/*', async (req: FastifyRequest, reply: FastifyReply) => {
+      const requestId = req.reqId;
+      const startTime = req.startTime;
+
+      const urlPath = req.url.split('?')[0] ?? '/';
+      const search = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+
+      const matchResult = this.router.match(urlPath, req.method, search);
+
+      if (!matchResult.matched) {
+        if (matchResult.reason === 'METHOD_NOT_ALLOWED') {
+          const allowed = matchResult.allowedMethods ?? [];
+          reply.header('allow', allowed.join(', '));
+
+          const methodError = new GatewayError({
+            message: `Method '${req.method}' not allowed for path '${urlPath}'`,
+            statusCode: 405,
+            code: GatewayErrorCode.BAD_REQUEST,
+            details: { allowedMethods: allowed },
+            requestId,
+          });
+
+          const envelope = createErrorEnvelope(methodError, requestId);
+          for (const [k, v] of Object.entries(envelope.headers)) {
+            reply.header(k, v);
+          }
+          return reply.status(405).send(envelope.envelope);
+        }
+
+        // Unmatched route -> 404 Route Not Found
+        const notFoundError = new RouteNotFoundError(urlPath, req.method, requestId);
+        const envelope = createErrorEnvelope(notFoundError, requestId);
+        for (const [k, v] of Object.entries(envelope.headers)) {
+          reply.header(k, v);
+        }
+        return reply.status(404).send(envelope.envelope);
+      }
+
+      // Execute streaming reverse proxy dispatch
+      const proxyResult = await handleProxyStream({
+        req,
+        reply,
+        targetUrl: matchResult.targetUrl,
+        route: matchResult.route,
+        poolManager: this.poolManager,
+        requestId,
+        startTime,
+      });
+
+      const breakdown = calculateLatencyBreakdown({
+        totalDurationMs: proxyResult.totalDurationMs,
+        upstreamLatencyMs: proxyResult.upstreamLatencyMs,
+      });
+
+      // Structured JSON access logging
+      logAccess(rootLogger, {
+        requestId,
+        method: req.method,
+        url: req.url,
+        statusCode: proxyResult.statusCode,
+        routeId: matchResult.route.id,
+        totalDurationMs: breakdown.totalDurationMs,
+        upstreamLatencyMs: breakdown.upstreamLatencyMs,
+        gatewayOverheadMs: breakdown.gatewayOverheadMs,
+        clientIp: req.ip,
+        userAgent: req.headers['user-agent'],
+      });
+
+      return reply;
+    });
+  }
+
+  /**
+   * Start gateway server and listen on configured host and port.
+   */
+  public async listen(overridePort?: number, overrideHost?: string): Promise<string> {
+    const port = overridePort ?? this.config.server.port;
+    const host = overrideHost ?? this.config.server.host;
+
+    const address = await this.app.listen({ port, host });
+    this.isRunning = true;
+    return address;
+  }
+
+  /**
+   * Wait until Fastify application is ready.
+   */
+  public async ready(): Promise<void> {
+    await this.app.ready();
+  }
+
+  /**
+   * Stop gateway server and gracefully close connection pools.
+   */
+  public async close(): Promise<void> {
+    if (!this.isRunning && !this.app.server.listening) {
+      return;
+    }
+    this.isRunning = false;
+    await this.app.close();
+    await this.poolManager.close();
+  }
+
+  /**
+   * Get underlying Fastify application instance.
+   */
+  public get fastifyInstance(): FastifyInstance {
+    return this.app;
+  }
+}
+
+/**
+ * Factory function to create a RouteX Gateway Server instance.
+ */
+export function createGatewayServer(
+  config: GatewayConfig,
+  options?: GatewayServerOptions
+): RouteXGatewayServer {
+  return new RouteXGatewayServer(config, options);
+}
