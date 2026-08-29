@@ -24,8 +24,8 @@ export function buildChatService(options: ChatServiceOptions = {}): FastifyInsta
     });
   });
 
-  // Allow raw stream payloads for streaming endpoints
-  app.addContentTypeParser('*', (_req, payload, done) => {
+  // Allow raw stream payloads for binary and streaming endpoints
+  app.addContentTypeParser('application/octet-stream', (_req, payload, done) => {
     done(null, payload);
   });
 
@@ -74,6 +74,20 @@ export function buildChatService(options: ChatServiceOptions = {}): FastifyInsta
           message: 'Invalid JSON body',
         });
       }
+    } else if (req.body instanceof Readable || (req.body && typeof (req.body as any).pipe === 'function')) {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req.body as AsyncIterable<Buffer | Uint8Array | string>) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as any));
+      }
+      const rawStr = Buffer.concat(chunks).toString('utf-8');
+      try {
+        body = JSON.parse(rawStr) as Record<string, unknown>;
+      } catch {
+        return reply.status(400).send({
+          error: 'BAD_REQUEST',
+          message: 'Invalid JSON body',
+        });
+      }
     } else if (typeof req.body === 'object' && req.body !== null) {
       body = req.body as Record<string, unknown>;
     }
@@ -103,7 +117,7 @@ export function buildChatService(options: ChatServiceOptions = {}): FastifyInsta
     let chunkCount = 0;
 
     // Consume request body stream directly without accumulating in memory
-    const stream = req.raw;
+    const stream = req.body instanceof Readable ? req.body : req.raw;
 
     for await (const chunk of stream) {
       const bufferChunk = Buffer.isBuffer(chunk)

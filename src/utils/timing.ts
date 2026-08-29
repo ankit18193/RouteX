@@ -22,10 +22,7 @@ export function startTimer(): HighResolutionTimer {
   const startNs = process.hrtime.bigint();
 
   const elapsedMs = (): number => {
-    const currentNs = process.hrtime.bigint();
-    const diffNs = currentNs - startNs;
-    // Convert nanoseconds to milliseconds with float precision (3 decimal places / microsecond precision)
-    return roundPrecision(Number(diffNs) / 1_000_000, 3);
+    return elapsedMsFrom(startNs);
   };
 
   const stop = (): number => {
@@ -37,6 +34,15 @@ export function startTimer(): HighResolutionTimer {
     elapsedMs,
     stop,
   };
+}
+
+/**
+ * Calculate elapsed milliseconds from a starting process.hrtime.bigint() timestamp.
+ */
+export function elapsedMsFrom(startNs: bigint): number {
+  const currentNs = process.hrtime.bigint();
+  const diffNs = currentNs - startNs;
+  return roundPrecision(Number(diffNs) / 1_000_000, 3);
 }
 
 /**
