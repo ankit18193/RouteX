@@ -8,7 +8,7 @@ import {
   TEST_JWT_SECRET,
   TEST_RSA_PUBLIC_KEY,
 } from '../../mock-services/user-service/jwt-utils.js';
-import type { GatewayConfig } from '../../src/types/index.js';
+import type { GatewayConfigInput } from '../../src/types/index.js';
 
 describe('RouteX Gateway Authentication & Identity Engine Integration', () => {
   let userService: FastifyInstance;
@@ -24,9 +24,9 @@ describe('RouteX Gateway Authentication & Identity Engine Integration', () => {
     userService = buildUserService({ logger: false });
     userAddress = await userService.listen({ port: 0, host: '127.0.0.1' });
 
-    const gatewayConfig: GatewayConfig = {
+    const gatewayConfig: GatewayConfigInput = {
       server: {
-        port: 0,
+        port: 8080,
         host: '127.0.0.1',
         requestTimeoutMs: 5000,
         headersTimeoutMs: 6000,

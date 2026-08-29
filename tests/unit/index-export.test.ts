@@ -3,7 +3,7 @@ import * as RouteX from '../../src/index.js';
 import * as MockServices from '../../mock-services/index.js';
 
 describe('RouteX Root Module Exports', () => {
-  it('should export all public Phase 1, Phase 2, Phase 3, and Phase 4 APIs from root entrypoint', () => {
+  it('should export all public Phase 1, Phase 2, Phase 3, Phase 4, and Phase 5 APIs from root entrypoint', () => {
     // Phase 1 exports
     expect(RouteX.GatewayConfigSchema).toBeDefined();
     expect(RouteX.loadGatewayConfig).toBeDefined();
@@ -38,6 +38,17 @@ describe('RouteX Root Module Exports', () => {
     expect(RouteX.AuthManager).toBeDefined();
     expect(RouteX.createAuthManager).toBeDefined();
     expect(RouteX.ANONYMOUS_AUTH_CONTEXT).toBeDefined();
+
+    // Phase 5 rate limit exports
+    expect(RouteX.RedisClient).toBeDefined();
+    expect(RouteX.createRedisClient).toBeDefined();
+    expect(RouteX.SlidingWindowRateLimiter).toBeDefined();
+    expect(RouteX.createSlidingWindowRateLimiter).toBeDefined();
+    expect(RouteX.RateLimitManager).toBeDefined();
+    expect(RouteX.createRateLimitManager).toBeDefined();
+    expect(RouteX.generateRateLimitKey).toBeDefined();
+    expect(RouteX.hashRateLimitIdentifier).toBeDefined();
+    expect(RouteX.SLIDING_WINDOW_LUA_SCRIPT).toBeDefined();
   });
 
   it('should export mock service factories and JWT test helpers', () => {

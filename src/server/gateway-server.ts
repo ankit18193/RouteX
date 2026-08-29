@@ -1,5 +1,6 @@
 import fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
-import type { GatewayConfig } from '../types/index.js';
+import type { GatewayConfig, GatewayConfigInput } from '../types/index.js';
+import { GatewayConfigSchema } from '../config/schema.js';
 import { ProxyRouter } from '../proxy/router.js';
 import { UpstreamPoolManager } from '../proxy/pool.js';
 import { handleProxyStream } from '../proxy/stream-handler.js';
@@ -11,9 +12,12 @@ import {
   GatewayError,
   GatewayErrorCode,
   RouteNotFoundError,
+  TooManyRequestsError,
 } from '../errors/index.js';
 import { AuthManager } from '../auth/auth-manager.js';
 import type { AuthContext } from '../auth/types.js';
+import { RateLimitManager } from '../rate-limit/rate-limit-manager.js';
+import type { RedisClient } from '../rate-limit/redis-client.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -25,40 +29,48 @@ declare module 'fastify' {
 
 export interface GatewayServerOptions {
   readonly logger?: boolean | undefined;
+  readonly redisClient?: RedisClient | undefined;
 }
 
 export class RouteXGatewayServer {
+  public readonly config: GatewayConfig;
   private readonly app: FastifyInstance;
   private readonly router: ProxyRouter;
   private readonly poolManager: UpstreamPoolManager;
   private readonly authManager: AuthManager;
+  private readonly rateLimitManager: RateLimitManager;
   private isRunning = false;
 
   constructor(
-    public readonly config: GatewayConfig,
+    config: GatewayConfig | GatewayConfigInput,
     options: GatewayServerOptions = {}
   ) {
+    this.config = GatewayConfigSchema.parse(config);
+
     const logger = createLogger({
-      level: config.server.logLevel,
-      format: config.server.logFormat,
+      level: this.config.server.logLevel,
+      format: this.config.server.logFormat,
       name: 'routex-gateway',
     });
 
     this.app = fastify({
       logger: options.logger ?? false,
-      requestTimeout: config.server.requestTimeoutMs,
+      requestTimeout: this.config.server.requestTimeoutMs,
       routerOptions: {
         maxParamLength: 2048,
       },
     });
 
-    this.router = new ProxyRouter(config.routes);
+    this.router = new ProxyRouter(this.config.routes);
     this.poolManager = new UpstreamPoolManager({
       connectTimeoutMs: 5000,
-      headersTimeoutMs: config.server.headersTimeoutMs,
-      bodyTimeoutMs: config.server.requestTimeoutMs,
+      headersTimeoutMs: this.config.server.headersTimeoutMs,
+      bodyTimeoutMs: this.config.server.requestTimeoutMs,
     });
-    this.authManager = new AuthManager(config.auth ?? {});
+    this.authManager = new AuthManager(this.config.auth ?? {});
+    this.rateLimitManager = new RateLimitManager(this.config.redis ?? {}, {
+      redisClient: options.redisClient,
+    });
 
     this.setupMiddleware();
     this.setupRoutes(logger);
@@ -146,7 +158,38 @@ export class RouteXGatewayServer {
         return reply.status(404).send(envelope.envelope);
       }
 
-      // 1. Edge Authentication
+      // 1. Tier-1 IP Rate Limit Shield (before auth to prevent brute force / unauthenticated abuse)
+      try {
+        const ipRateLimit = await this.rateLimitManager.checkIpRateLimit(req.ip, matchResult.route);
+        if (ipRateLimit) {
+          const rlHeaders = this.rateLimitManager.formatHeaders(ipRateLimit);
+          for (const [k, v] of Object.entries(rlHeaders)) {
+            reply.header(k, v);
+          }
+
+          if (!ipRateLimit.allowed) {
+            const error = new TooManyRequestsError(
+              'Rate limit exceeded for IP address',
+              ipRateLimit.retryAfterSec,
+              { limit: ipRateLimit.limit, resetAt: ipRateLimit.resetAt },
+              requestId
+            );
+            const envelope = createErrorEnvelope(error, requestId);
+            for (const [k, v] of Object.entries(envelope.headers)) {
+              reply.header(k, v);
+            }
+            return reply.status(429).send(envelope.envelope);
+          }
+        }
+      } catch (err: unknown) {
+        const envelope = createErrorEnvelope(err, requestId);
+        for (const [k, v] of Object.entries(envelope.headers)) {
+          reply.header(k, v);
+        }
+        return reply.status(envelope.statusCode).send(envelope.envelope);
+      }
+
+      // 2. Edge Authentication
       let authContext: AuthContext;
       try {
         authContext = await this.authManager.authenticate(req.headers, matchResult.route);
@@ -160,7 +203,7 @@ export class RouteXGatewayServer {
         return reply.status(envelope.statusCode).send(envelope.envelope);
       }
 
-      // 2. Edge Authorization (Required Roles)
+      // 3. Edge Authorization (Required Roles)
       try {
         this.authManager.authorize(authContext, matchResult.route);
       } catch (err: unknown) {
@@ -171,7 +214,41 @@ export class RouteXGatewayServer {
         return reply.status(envelope.statusCode).send(envelope.envelope);
       }
 
-      // 3. Execute streaming reverse proxy dispatch with verified identity
+      // 4. Tier-2 Identity Rate Limit (User / API Key / Tiered)
+      try {
+        const identityRateLimit = await this.rateLimitManager.checkIdentityRateLimit(
+          authContext,
+          matchResult.route
+        );
+        if (identityRateLimit) {
+          const idHeaders = this.rateLimitManager.formatHeaders(identityRateLimit);
+          for (const [k, v] of Object.entries(idHeaders)) {
+            reply.header(k, v);
+          }
+
+          if (!identityRateLimit.allowed) {
+            const error = new TooManyRequestsError(
+              'Rate limit exceeded for identity',
+              identityRateLimit.retryAfterSec,
+              { limit: identityRateLimit.limit, resetAt: identityRateLimit.resetAt },
+              requestId
+            );
+            const envelope = createErrorEnvelope(error, requestId);
+            for (const [k, v] of Object.entries(envelope.headers)) {
+              reply.header(k, v);
+            }
+            return reply.status(429).send(envelope.envelope);
+          }
+        }
+      } catch (err: unknown) {
+        const envelope = createErrorEnvelope(err, requestId);
+        for (const [k, v] of Object.entries(envelope.headers)) {
+          reply.header(k, v);
+        }
+        return reply.status(envelope.statusCode).send(envelope.envelope);
+      }
+
+      // 5. Execute streaming reverse proxy dispatch with verified identity
       const proxyResult = await handleProxyStream({
         req,
         reply,
@@ -213,6 +290,7 @@ export class RouteXGatewayServer {
     const port = overridePort ?? this.config.server.port;
     const host = overrideHost ?? this.config.server.host;
 
+    await this.rateLimitManager.init();
     const address = await this.app.listen({ port, host });
     this.isRunning = true;
     return address;
@@ -222,18 +300,22 @@ export class RouteXGatewayServer {
    * Wait until Fastify application is ready.
    */
   public async ready(): Promise<void> {
+    await this.rateLimitManager.init();
     await this.app.ready();
   }
 
   /**
-   * Stop gateway server and gracefully close connection pools.
+   * Stop gateway server and gracefully close connection pools and Redis.
    */
   public async close(): Promise<void> {
     if (!this.isRunning && !this.app.server.listening) {
+      await this.rateLimitManager.close();
+      await this.poolManager.close();
       return;
     }
     this.isRunning = false;
     await this.app.close();
+    await this.rateLimitManager.close();
     await this.poolManager.close();
   }
 
@@ -250,13 +332,20 @@ export class RouteXGatewayServer {
   public get auth(): AuthManager {
     return this.authManager;
   }
+
+  /**
+   * Get underlying RateLimitManager instance.
+   */
+  public get rateLimit(): RateLimitManager {
+    return this.rateLimitManager;
+  }
 }
 
 /**
  * Factory function to create a RouteX Gateway Server instance.
  */
 export function createGatewayServer(
-  config: GatewayConfig,
+  config: GatewayConfig | GatewayConfigInput,
   options?: GatewayServerOptions
 ): RouteXGatewayServer {
   return new RouteXGatewayServer(config, options);

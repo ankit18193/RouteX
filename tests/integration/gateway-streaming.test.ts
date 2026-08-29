@@ -4,7 +4,7 @@ import { request } from 'undici';
 import { Readable } from 'node:stream';
 import { createGatewayServer, type RouteXGatewayServer } from '../../src/server/gateway-server.js';
 import { buildChatService } from '../../mock-services/chat-service/index.js';
-import type { GatewayConfig } from '../../src/types/index.js';
+import type { GatewayConfigInput } from '../../src/types/index.js';
 
 describe('RouteX Zero-Buffer Streaming Reverse Proxy', () => {
   let chatService: FastifyInstance;
@@ -17,9 +17,9 @@ describe('RouteX Zero-Buffer Streaming Reverse Proxy', () => {
     chatService = buildChatService({ logger: false });
     chatAddress = await chatService.listen({ port: 0, host: '127.0.0.1' });
 
-    const gatewayConfig: GatewayConfig = {
+    const gatewayConfig: GatewayConfigInput = {
       server: {
-        port: 0,
+        port: 8080,
         host: '127.0.0.1',
         requestTimeoutMs: 15000,
         headersTimeoutMs: 16000,

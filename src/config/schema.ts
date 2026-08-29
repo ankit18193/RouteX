@@ -43,12 +43,15 @@ export const ServerConfigSchema = z
   });
 
 export const RedisConfigSchema = z.object({
+  enabled: z.boolean().default(true),
   host: z.string().min(1).default('localhost'),
   port: z.number().int().min(1).max(65535).default(6379),
   password: z.string().optional(),
   db: z.number().int().min(0).max(15).optional().default(0),
   tls: z.boolean().optional().default(false),
   connectTimeoutMs: z.number().int().min(100).max(30000).default(3000),
+  commandTimeoutMs: z.number().int().min(10).max(10000).default(2000),
+  keyPrefix: z.string().default('routex:'),
 });
 
 export const JwtAlgorithmSchema = z.enum(['HS256', 'RS256']);
@@ -95,7 +98,8 @@ export const RouteRateLimitPolicySchema = z.object({
   enabled: z.boolean().default(true),
   windowSec: z.number().int().min(1).max(86400).default(60),
   limit: z.number().int().min(1).default(100),
-  failurePolicy: RateLimitFailurePolicySchema.default('fail-closed'),
+  ipLimit: z.number().int().min(1).optional(),
+  failurePolicy: RateLimitFailurePolicySchema.default('fail-open'),
   tiers: z.record(z.string(), z.number().int().min(1)).optional(),
 });
 
@@ -206,3 +210,4 @@ export type RouteRateLimitPolicy = z.infer<typeof RouteRateLimitPolicySchema>;
 export type RouteTimeoutPolicy = z.infer<typeof RouteTimeoutPolicySchema>;
 export type RouteDefinition = z.infer<typeof RouteDefinitionSchema>;
 export type GatewayConfig = z.infer<typeof GatewayConfigSchema>;
+export type GatewayConfigInput = z.input<typeof GatewayConfigSchema>;

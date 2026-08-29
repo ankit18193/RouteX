@@ -108,6 +108,14 @@ export async function handleProxyStream(options: ProxyHandlerOptions): Promise<P
       requestId
     );
 
+    // Merge headers configured on Fastify reply (e.g. rate limit headers) into client response
+    const replyHeaders = reply.getHeaders();
+    for (const [key, val] of Object.entries(replyHeaders)) {
+      if (val !== undefined) {
+        sanitizedResponseHeaders[key.toLowerCase()] = String(val);
+      }
+    }
+
     // Write upstream status and sanitized headers directly to client response
     reply.raw.writeHead(upstreamResponse.statusCode, sanitizedResponseHeaders);
 

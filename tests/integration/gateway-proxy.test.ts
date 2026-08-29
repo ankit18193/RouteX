@@ -5,7 +5,7 @@ import http from 'node:http';
 import { createGatewayServer, type RouteXGatewayServer } from '../../src/server/gateway-server.js';
 import { buildUserService } from '../../mock-services/user-service/index.js';
 import { buildChatService } from '../../mock-services/chat-service/index.js';
-import type { GatewayConfig } from '../../src/types/index.js';
+import type { GatewayConfigInput } from '../../src/types/index.js';
 
 describe('RouteX Gateway Reverse Proxy Integration', () => {
   let userService: FastifyInstance;
@@ -23,9 +23,9 @@ describe('RouteX Gateway Reverse Proxy Integration', () => {
     userAddress = await userService.listen({ port: 0, host: '127.0.0.1' });
     chatAddress = await chatService.listen({ port: 0, host: '127.0.0.1' });
 
-    const gatewayConfig: GatewayConfig = {
+    const gatewayConfig: GatewayConfigInput = {
       server: {
-        port: 0,
+        port: 8080,
         host: '127.0.0.1',
         requestTimeoutMs: 5000,
         headersTimeoutMs: 6000,

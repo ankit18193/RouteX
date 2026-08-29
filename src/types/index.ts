@@ -15,6 +15,7 @@ export type {
   RouteTimeoutPolicy,
   RouteDefinition,
   GatewayConfig,
+  GatewayConfigInput,
 } from '../config/schema.js';
 
 export interface LatencyBreakdown {
