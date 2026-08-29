@@ -3,7 +3,7 @@ import * as RouteX from '../../src/index.js';
 import * as MockServices from '../../mock-services/index.js';
 
 describe('RouteX Root Module Exports', () => {
-  it('should export all public Phase 1, Phase 2, and Phase 3 APIs from root entrypoint', () => {
+  it('should export all public Phase 1, Phase 2, Phase 3, and Phase 4 APIs from root entrypoint', () => {
     // Phase 1 exports
     expect(RouteX.GatewayConfigSchema).toBeDefined();
     expect(RouteX.loadGatewayConfig).toBeDefined();
@@ -26,6 +26,18 @@ describe('RouteX Root Module Exports', () => {
     expect(RouteX.sanitizeResponseHeaders).toBeDefined();
     expect(RouteX.RouteXGatewayServer).toBeDefined();
     expect(RouteX.createGatewayServer).toBeDefined();
+
+    // Phase 4 auth exports
+    expect(RouteX.extractCredentials).toBeDefined();
+    expect(RouteX.JwtVerifier).toBeDefined();
+    expect(RouteX.createJwtVerifier).toBeDefined();
+    expect(RouteX.ApiKeyAuthenticator).toBeDefined();
+    expect(RouteX.createApiKeyAuthenticator).toBeDefined();
+    expect(RouteX.ApiKeyCache).toBeDefined();
+    expect(RouteX.InMemoryApiKeyStore).toBeDefined();
+    expect(RouteX.AuthManager).toBeDefined();
+    expect(RouteX.createAuthManager).toBeDefined();
+    expect(RouteX.ANONYMOUS_AUTH_CONTEXT).toBeDefined();
   });
 
   it('should export mock service factories and JWT test helpers', () => {

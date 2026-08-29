@@ -51,6 +51,41 @@ export const RedisConfigSchema = z.object({
   connectTimeoutMs: z.number().int().min(100).max(30000).default(3000),
 });
 
+export const JwtAlgorithmSchema = z.enum(['HS256', 'RS256']);
+
+export const JwtConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  algorithms: z.array(JwtAlgorithmSchema).default(['HS256', 'RS256']),
+  issuer: z.string().min(1).optional(),
+  audience: z.string().min(1).optional(),
+  hs256Secret: z.string().min(1).optional(),
+  rs256PublicKey: z.string().min(1).optional(),
+  hs256SecretEnv: z.string().min(1).optional(),
+  rs256PublicKeyEnv: z.string().min(1).optional(),
+});
+
+export const ApiKeyDefinitionSchema = z.object({
+  id: z.string().min(1),
+  key: z.string().min(1),
+  userId: z.string().min(1),
+  roles: z.array(z.string().min(1)).default([]),
+  tier: z.string().min(1).optional(),
+  revoked: z.boolean().default(false),
+  expiresAt: z.union([z.string(), z.number()]).optional(),
+});
+
+export const ApiKeysConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  cacheTtlMs: z.number().int().min(1).max(3600000).default(60000),
+  cacheMaxEntries: z.number().int().min(1).max(1000000).default(1000),
+  keys: z.array(ApiKeyDefinitionSchema).default([]),
+});
+
+export const AuthConfigSchema = z.object({
+  jwt: JwtConfigSchema.optional(),
+  apiKeys: ApiKeysConfigSchema.optional(),
+});
+
 export const RouteAuthPolicySchema = z.object({
   mode: AuthModeSchema.default('public'),
   requiredRoles: z.array(z.string().min(1)).optional().default([]),
@@ -154,6 +189,7 @@ export const RoutesConfigSchema = z.object({
 export const GatewayConfigSchema = z.object({
   server: ServerConfigSchema.default({}),
   redis: RedisConfigSchema.default({}),
+  auth: AuthConfigSchema.optional(),
   routes: RoutesListSchema,
 });
 
@@ -164,6 +200,7 @@ export type LogLevel = z.infer<typeof LogLevelSchema>;
 export type LogFormat = z.infer<typeof LogFormatSchema>;
 export type ServerConfig = z.infer<typeof ServerConfigSchema>;
 export type RedisConfig = z.infer<typeof RedisConfigSchema>;
+export type JwtAlgorithm = z.infer<typeof JwtAlgorithmSchema>;
 export type RouteAuthPolicy = z.infer<typeof RouteAuthPolicySchema>;
 export type RouteRateLimitPolicy = z.infer<typeof RouteRateLimitPolicySchema>;
 export type RouteTimeoutPolicy = z.infer<typeof RouteTimeoutPolicySchema>;

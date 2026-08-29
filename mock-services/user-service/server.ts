@@ -52,6 +52,7 @@ export function buildUserService(options: UserServiceOptions = {}): FastifyInsta
       service: 'user-service',
       userId,
       roles,
+      userRoles: roles,
       requestId,
       authType,
       receivedHeaders: req.headers,

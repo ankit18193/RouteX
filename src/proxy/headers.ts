@@ -1,5 +1,6 @@
 import type { IncomingHttpHeaders, OutgoingHttpHeaders } from 'node:http';
 import { sanitizeHeaderValue } from '../utils/uuid.js';
+import type { AuthContext } from '../auth/types.js';
 
 /**
  * Standard RFC 7230 / RFC 9110 Hop-by-Hop headers.
@@ -35,6 +36,7 @@ export interface RequestHeaderSanitizeOptions {
   readonly targetHost: string;
   readonly originalHost?: string | undefined;
   readonly proto?: string | undefined;
+  readonly authContext?: AuthContext | undefined;
 }
 
 /**
@@ -123,6 +125,19 @@ export function sanitizeRequestHeaders(
   }
 
   sanitized['x-gateway-forwarded-by'] = 'routex';
+
+  // 7. Inject verified identity headers from trusted authContext if provided
+  if (options.authContext) {
+    if (options.authContext.authenticated && options.authContext.userId) {
+      sanitized['x-user-id'] = sanitizeHeaderValue(options.authContext.userId);
+      sanitized['x-user-roles'] = sanitizeHeaderValue(options.authContext.roles.join(','));
+      sanitized['x-auth-type'] = options.authContext.authType;
+      sanitized['x-gateway-auth-status'] = 'authenticated';
+    } else {
+      sanitized['x-auth-type'] = 'anonymous';
+      sanitized['x-gateway-auth-status'] = 'anonymous';
+    }
+  }
 
   return sanitized;
 }

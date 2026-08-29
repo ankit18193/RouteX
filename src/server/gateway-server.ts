@@ -12,11 +12,14 @@ import {
   GatewayErrorCode,
   RouteNotFoundError,
 } from '../errors/index.js';
+import { AuthManager } from '../auth/auth-manager.js';
+import type { AuthContext } from '../auth/types.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
     reqId: string;
     startTime: bigint;
+    authContext?: AuthContext | undefined;
   }
 }
 
@@ -28,6 +31,7 @@ export class RouteXGatewayServer {
   private readonly app: FastifyInstance;
   private readonly router: ProxyRouter;
   private readonly poolManager: UpstreamPoolManager;
+  private readonly authManager: AuthManager;
   private isRunning = false;
 
   constructor(
@@ -54,6 +58,7 @@ export class RouteXGatewayServer {
       headersTimeoutMs: config.server.headersTimeoutMs,
       bodyTimeoutMs: config.server.requestTimeoutMs,
     });
+    this.authManager = new AuthManager(config.auth ?? {});
 
     this.setupMiddleware();
     this.setupRoutes(logger);
@@ -141,7 +146,32 @@ export class RouteXGatewayServer {
         return reply.status(404).send(envelope.envelope);
       }
 
-      // Execute streaming reverse proxy dispatch
+      // 1. Edge Authentication
+      let authContext: AuthContext;
+      try {
+        authContext = await this.authManager.authenticate(req.headers, matchResult.route);
+        req.authContext = authContext;
+      } catch (err: unknown) {
+        const envelope = createErrorEnvelope(err, requestId);
+        reply.header('www-authenticate', 'Bearer realm="RouteX"');
+        for (const [k, v] of Object.entries(envelope.headers)) {
+          reply.header(k, v);
+        }
+        return reply.status(envelope.statusCode).send(envelope.envelope);
+      }
+
+      // 2. Edge Authorization (Required Roles)
+      try {
+        this.authManager.authorize(authContext, matchResult.route);
+      } catch (err: unknown) {
+        const envelope = createErrorEnvelope(err, requestId);
+        for (const [k, v] of Object.entries(envelope.headers)) {
+          reply.header(k, v);
+        }
+        return reply.status(envelope.statusCode).send(envelope.envelope);
+      }
+
+      // 3. Execute streaming reverse proxy dispatch with verified identity
       const proxyResult = await handleProxyStream({
         req,
         reply,
@@ -150,6 +180,7 @@ export class RouteXGatewayServer {
         poolManager: this.poolManager,
         requestId,
         startTime,
+        authContext,
       });
 
       const breakdown = calculateLatencyBreakdown({
@@ -211,6 +242,13 @@ export class RouteXGatewayServer {
    */
   public get fastifyInstance(): FastifyInstance {
     return this.app;
+  }
+
+  /**
+   * Get underlying AuthManager instance.
+   */
+  public get auth(): AuthManager {
+    return this.authManager;
   }
 }
 

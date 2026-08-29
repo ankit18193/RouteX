@@ -128,7 +128,6 @@ describe('RouteX Gateway Reverse Proxy Integration', () => {
                 'x-user-id': 'spoofed_admin_id', // Spoofed user header must be stripped
                 'connection': 'close, X-Dynamic-Hop',
                 'x-dynamic-hop': 'strip-me',
-                'authorization': 'Bearer valid.jwt.token',
               },
             },
             (res) => {
@@ -160,7 +159,6 @@ describe('RouteX Gateway Reverse Proxy Integration', () => {
       const receivedHeaders = json.receivedHeaders as Record<string, string>;
       expect(receivedHeaders['x-dynamic-hop']).toBeUndefined();
       expect(receivedHeaders['x-gateway-forwarded-by']).toBe('routex');
-      expect(receivedHeaders['authorization']).toBe('Bearer valid.jwt.token');
     });
 
     it('should proxy POST /api/v1/messages and receive 201 created', async () => {

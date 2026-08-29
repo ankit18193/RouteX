@@ -6,6 +6,7 @@ import type { UpstreamPoolManager } from './pool.js';
 import { sanitizeRequestHeaders, sanitizeResponseHeaders } from './headers.js';
 import { createErrorEnvelope, GatewayTimeoutError } from '../errors/index.js';
 import { elapsedMsFrom, startTimer } from '../utils/timing.js';
+import type { AuthContext } from '../auth/types.js';
 
 export interface ProxyHandlerOptions {
   readonly req: FastifyRequest;
@@ -15,6 +16,7 @@ export interface ProxyHandlerOptions {
   readonly poolManager: UpstreamPoolManager;
   readonly requestId: string;
   readonly startTime: bigint;
+  readonly authContext?: AuthContext | undefined;
 }
 
 export interface ProxyResult {
@@ -27,7 +29,7 @@ export interface ProxyResult {
  * Execute zero-buffer streaming reverse proxy dispatch to upstream service.
  */
 export async function handleProxyStream(options: ProxyHandlerOptions): Promise<ProxyResult> {
-  const { req, reply, targetUrl, route, poolManager, requestId, startTime } = options;
+  const { req, reply, targetUrl, route, poolManager, requestId, startTime, authContext } = options;
   const parsedTarget = new URL(targetUrl);
 
   const upstreamTimer = startTimer();
@@ -69,6 +71,7 @@ export async function handleProxyStream(options: ProxyHandlerOptions): Promise<P
       targetHost: parsedTarget.host,
       originalHost: typeof req.headers['host'] === 'string' ? req.headers['host'] : undefined,
       proto: req.protocol,
+      authContext,
     });
 
     const method = req.method.toUpperCase();
