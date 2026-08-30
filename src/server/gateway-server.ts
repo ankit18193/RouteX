@@ -45,6 +45,7 @@ export class RouteXGatewayServer {
   private readonly cacheManager: CacheManager;
   private readonly circuitManager: CircuitManager;
   private isRunning = false;
+  private isShuttingDown = false;
 
   constructor(
     config: GatewayConfig | GatewayConfigInput,
@@ -131,14 +132,61 @@ export class RouteXGatewayServer {
   }
 
   private setupRoutes(rootLogger: ReturnType<typeof createLogger>): void {
-    // Health check endpoint for gateway itself
-    this.app.get('/gateway/healthz', async () => {
+    // 1. Liveness health check endpoints (k8s / docker / load balancer liveness)
+    const livenessHandler = async () => {
       return {
         status: 'ok',
         gateway: 'RouteX',
+        version: '0.1.0',
         timestamp: new Date().toISOString(),
         uptimeSec: Math.floor(process.uptime()),
+        memory: process.memoryUsage(),
       };
+    };
+
+    this.app.get('/healthz', livenessHandler);
+    this.app.get('/livez', livenessHandler);
+    this.app.get('/gateway/healthz', livenessHandler);
+
+    // 2. Readiness health check endpoint (checks Redis dependency, router, and shutdown state)
+    this.app.get('/readyz', async (_req: FastifyRequest, reply: FastifyReply) => {
+      if (this.isShuttingDown) {
+        return reply.status(503).send({
+          status: 'not_ready',
+          gateway: 'RouteX',
+          reason: 'GATEWAY_SHUTTING_DOWN',
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      const checks: Record<string, 'ok' | 'down'> = {
+        router: this.router ? 'ok' : 'down',
+        poolManager: this.poolManager ? 'ok' : 'down',
+      };
+
+      let isReady = true;
+
+      if (this.rateLimitManager?.client) {
+        try {
+          const pingResult = await this.rateLimitManager.client.rawClient.ping();
+          checks.redis = pingResult === 'PONG' ? 'ok' : 'down';
+          if (checks.redis !== 'ok') {
+            isReady = false;
+          }
+        } catch {
+          checks.redis = 'down';
+          isReady = false;
+        }
+      }
+
+      const statusCode = isReady ? 200 : 503;
+      return reply.status(statusCode).send({
+        status: isReady ? 'ok' : 'not_ready',
+        gateway: 'RouteX',
+        checks,
+        timestamp: new Date().toISOString(),
+        uptimeSec: Math.floor(process.uptime()),
+      });
     });
 
     // Catch-all reverse proxy dispatcher
@@ -542,6 +590,7 @@ export class RouteXGatewayServer {
    * Stop gateway server and gracefully close connection pools and Redis.
    */
   public async close(): Promise<void> {
+    this.isShuttingDown = true;
     if (!this.isRunning && !this.app.server.listening) {
       await this.rateLimitManager.close();
       await this.poolManager.close();

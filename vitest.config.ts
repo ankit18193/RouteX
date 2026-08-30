@@ -9,7 +9,7 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
       include: ['src/**/*.ts', 'mock-services/**/*.ts'],
-      exclude: ['src/types/**', 'dist/**'],
+      exclude: ['src/types/**', 'src/bin/**', 'dist/**'],
     },
     testTimeout: 15000,
     fileParallelism: false,
