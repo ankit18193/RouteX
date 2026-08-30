@@ -120,10 +120,7 @@ describe('RouteX Gateway Response Caching Integration', () => {
   });
 
   beforeEach(async () => {
-    const keys = await redisClient.rawClient.keys('gw_cache_test:*');
-    if (keys.length > 0) {
-      await redisClient.rawClient.del(...keys);
-    }
+    await redisClient.rawClient.flushdb();
   });
 
   afterAll(async () => {

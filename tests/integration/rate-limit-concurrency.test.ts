@@ -18,7 +18,11 @@ describe('Distributed Sliding-Window Concurrency & Isolation Integration', () =>
   });
 
   afterAll(async () => {
-    await redis.close();
+    try {
+      await redis.close();
+    } catch {
+      // Ignored
+    }
   });
 
   it('should guarantee atomicity under 100 concurrent requests against a limit of 20', async () => {

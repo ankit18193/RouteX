@@ -37,10 +37,7 @@ describe('CacheManager Unit & Integration', () => {
   });
 
   beforeEach(async () => {
-    const keys = await redisClient.rawClient.keys('cm_test:*');
-    if (keys.length > 0) {
-      await redisClient.rawClient.del(...keys);
-    }
+    await redisClient.rawClient.flushdb();
   });
 
   afterAll(async () => {

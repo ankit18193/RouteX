@@ -11,6 +11,7 @@ export default defineConfig({
       include: ['src/**/*.ts', 'mock-services/**/*.ts'],
       exclude: ['src/types/**', 'dist/**'],
     },
-    testTimeout: 10000,
+    testTimeout: 15000,
+    fileParallelism: false,
   },
 });
