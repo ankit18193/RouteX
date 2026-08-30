@@ -12,6 +12,8 @@ export type {
   RedisConfig,
   RouteAuthPolicy,
   RouteRateLimitPolicy,
+  RouteCachePolicy,
+  RouteCircuitBreakerPolicy,
   RouteTimeoutPolicy,
   RouteDefinition,
   GatewayConfig,

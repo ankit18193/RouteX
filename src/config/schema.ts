@@ -103,6 +103,23 @@ export const RouteRateLimitPolicySchema = z.object({
   tiers: z.record(z.string(), z.number().int().min(1)).optional(),
 });
 
+export const RouteCachePolicySchema = z.object({
+  enabled: z.boolean().default(false),
+  ttlSec: z.number().int().min(1).max(86400).default(30),
+  respectCacheControl: z.boolean().default(true),
+  maxBodyBytes: z.number().int().min(1024).max(10485760).default(1048576),
+  varyBy: z.array(z.string().min(1)).default([]),
+  allowAuthenticated: z.boolean().default(false),
+});
+
+export const RouteCircuitBreakerPolicySchema = z.object({
+  enabled: z.boolean().default(true),
+  failureThreshold: z.number().int().min(1).max(1000).default(5),
+  resetTimeoutMs: z.number().int().min(100).max(600000).default(10000),
+  halfOpenMaxRequests: z.number().int().min(1).max(100).default(1),
+  failureStatusCodes: z.array(z.number().int().min(100).max(599)).default([502, 503, 504]),
+});
+
 export const RouteTimeoutPolicySchema = z.object({
   connectTimeoutMs: z.number().int().min(50).max(30000).default(1000),
   responseTimeoutMs: z.number().int().min(50).max(120000).default(3000),
@@ -141,6 +158,8 @@ export const RouteDefinitionSchema = z.object({
   ]),
   auth: RouteAuthPolicySchema.default({ mode: 'public' }),
   rateLimit: RouteRateLimitPolicySchema.optional(),
+  cache: RouteCachePolicySchema.optional(),
+  circuitBreaker: RouteCircuitBreakerPolicySchema.optional(),
   timeouts: RouteTimeoutPolicySchema.default({
     connectTimeoutMs: 1000,
     responseTimeoutMs: 3000,
@@ -207,6 +226,8 @@ export type RedisConfig = z.infer<typeof RedisConfigSchema>;
 export type JwtAlgorithm = z.infer<typeof JwtAlgorithmSchema>;
 export type RouteAuthPolicy = z.infer<typeof RouteAuthPolicySchema>;
 export type RouteRateLimitPolicy = z.infer<typeof RouteRateLimitPolicySchema>;
+export type RouteCachePolicy = z.infer<typeof RouteCachePolicySchema>;
+export type RouteCircuitBreakerPolicy = z.infer<typeof RouteCircuitBreakerPolicySchema>;
 export type RouteTimeoutPolicy = z.infer<typeof RouteTimeoutPolicySchema>;
 export type RouteDefinition = z.infer<typeof RouteDefinitionSchema>;
 export type GatewayConfig = z.infer<typeof GatewayConfigSchema>;

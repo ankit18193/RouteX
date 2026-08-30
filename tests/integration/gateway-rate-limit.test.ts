@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { type FastifyInstance } from 'fastify';
 import { request } from 'undici';
 import { createGatewayServer, type RouteXGatewayServer } from '../../src/server/gateway-server.js';
@@ -122,7 +122,16 @@ describe('RouteX Distributed Redis Rate Limiter Gateway Integration', () => {
       logger: false,
       redisClient,
     });
-    gatewayAddress = await gateway.listen(0, '127.0.0.1');
+    await gateway.listen(0, '127.0.0.1');
+    const port = (gateway.fastifyInstance.server.address() as any).port;
+    gatewayAddress = `http://127.0.0.1:${port}`;
+  });
+
+  beforeEach(async () => {
+    const keys = await redisClient.rawClient.keys('gw_test:*');
+    if (keys.length > 0) {
+      await redisClient.rawClient.del(...keys);
+    }
   });
 
   afterAll(async () => {
