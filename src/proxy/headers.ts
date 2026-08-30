@@ -92,7 +92,11 @@ export function sanitizeRequestHeaders(
     }
 
     // 2. Strip untrusted identity & internal gateway headers sent by client
-    if (UNTRUSTED_INCOMING_HEADERS.has(key) || key.startsWith('x-gateway-')) {
+    if (
+      UNTRUSTED_INCOMING_HEADERS.has(key) ||
+      key.startsWith('x-gateway-') ||
+      key.startsWith('x-internal-')
+    ) {
       continue;
     }
 
