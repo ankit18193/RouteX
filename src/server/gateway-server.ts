@@ -598,6 +598,13 @@ export class RouteXGatewayServer {
       return;
     }
     this.isRunning = false;
+
+    // Close idle keep-alive connections so server closes gracefully without waiting for keep-alive timeout
+    const rawServer = this.app.server;
+    if (rawServer && typeof (rawServer as any).closeIdleConnections === 'function') {
+      (rawServer as any).closeIdleConnections();
+    }
+
     await this.app.close();
     await this.rateLimitManager.close();
     await this.poolManager.close();
