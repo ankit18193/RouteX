@@ -169,6 +169,26 @@ export class GatewayTimeoutError extends GatewayError {
   }
 }
 
+export class CircuitBreakerOpenError extends GatewayError {
+  public readonly retryAfterSec?: number | undefined;
+
+  constructor(
+    origin: string,
+    retryAfterSec?: number | undefined,
+    details?: unknown,
+    requestId?: string | undefined
+  ) {
+    super({
+      message: `Upstream circuit breaker is OPEN for '${origin}'. Requests temporarily blocked.`,
+      code: GatewayErrorCode.UPSTREAM_CIRCUIT_OPEN,
+      statusCode: 503,
+      details: { origin, ...(details && typeof details === 'object' ? details : {}) },
+      requestId,
+    });
+    this.retryAfterSec = retryAfterSec;
+  }
+}
+
 export class ConfigurationError extends GatewayError {
   constructor(message: string, details?: unknown) {
     super({

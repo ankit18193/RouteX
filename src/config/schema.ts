@@ -107,7 +107,7 @@ export const RouteCachePolicySchema = z.object({
   enabled: z.boolean().default(false),
   ttlSec: z.number().int().min(1).max(86400).default(30),
   respectCacheControl: z.boolean().default(true),
-  maxBodyBytes: z.number().int().min(1024).max(10485760).default(1048576),
+  maxBodyBytes: z.number().int().min(1).max(10485760).default(1048576),
   varyBy: z.array(z.string().min(1)).default([]),
   allowAuthenticated: z.boolean().default(false),
 });

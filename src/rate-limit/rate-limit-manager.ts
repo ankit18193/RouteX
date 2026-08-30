@@ -39,6 +39,10 @@ export class RateLimitManager {
     });
   }
 
+  public get client(): RedisClient {
+    return this.redis;
+  }
+
   /**
    * Initialize Redis connection and Lua script cache.
    */

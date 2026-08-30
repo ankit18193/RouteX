@@ -49,6 +49,17 @@ describe('RouteX Root Module Exports', () => {
     expect(RouteX.generateRateLimitKey).toBeDefined();
     expect(RouteX.hashRateLimitIdentifier).toBeDefined();
     expect(RouteX.SLIDING_WINDOW_LUA_SCRIPT).toBeDefined();
+
+    // Phase 6 cache & circuit-breaker exports
+    expect(RouteX.generateCacheKey).toBeDefined();
+    expect(RouteX.RedisCacheStore).toBeDefined();
+    expect(RouteX.isRequestCacheable).toBeDefined();
+    expect(RouteX.isResponseCacheable).toBeDefined();
+    expect(RouteX.SingleFlightGroup).toBeDefined();
+    expect(RouteX.CacheManager).toBeDefined();
+    expect(RouteX.CircuitBreaker).toBeDefined();
+    expect(RouteX.CircuitManager).toBeDefined();
+    expect(RouteX.CircuitBreakerOpenError).toBeDefined();
   });
 
   it('should export mock service factories and JWT test helpers', () => {

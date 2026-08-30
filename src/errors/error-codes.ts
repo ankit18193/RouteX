@@ -14,6 +14,7 @@ export const GatewayErrorCode = {
   BAD_GATEWAY: 'BAD_GATEWAY',
   SERVICE_UNAVAILABLE: 'SERVICE_UNAVAILABLE',
   GATEWAY_TIMEOUT: 'GATEWAY_TIMEOUT',
+  UPSTREAM_CIRCUIT_OPEN: 'UPSTREAM_CIRCUIT_OPEN',
   CONFIGURATION_ERROR: 'CONFIGURATION_ERROR',
 } as const;
 
@@ -31,5 +32,6 @@ export const GatewayErrorStatusMap: Record<GatewayErrorCode, number> = {
   [GatewayErrorCode.BAD_GATEWAY]: 502,
   [GatewayErrorCode.SERVICE_UNAVAILABLE]: 503,
   [GatewayErrorCode.GATEWAY_TIMEOUT]: 504,
+  [GatewayErrorCode.UPSTREAM_CIRCUIT_OPEN]: 503,
   [GatewayErrorCode.CONFIGURATION_ERROR]: 500,
 };

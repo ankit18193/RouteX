@@ -23,6 +23,8 @@ export interface ProxyResult {
   readonly statusCode: number;
   readonly upstreamLatencyMs: number;
   readonly totalDurationMs: number;
+  readonly responseHeaders?: Record<string, string | string[] | undefined> | undefined;
+  readonly responseBody?: Buffer | undefined;
 }
 
 /**
@@ -108,7 +110,7 @@ export async function handleProxyStream(options: ProxyHandlerOptions): Promise<P
       requestId
     );
 
-    // Merge headers configured on Fastify reply (e.g. rate limit headers) into client response
+    // Merge headers configured on Fastify reply (e.g. rate limit headers, cache headers) into client response
     const replyHeaders = reply.getHeaders();
     for (const [key, val] of Object.entries(replyHeaders)) {
       if (val !== undefined) {
@@ -119,15 +121,40 @@ export async function handleProxyStream(options: ProxyHandlerOptions): Promise<P
     // Write upstream status and sanitized headers directly to client response
     reply.raw.writeHead(upstreamResponse.statusCode, sanitizedResponseHeaders);
 
+    // Bounded cache collection during streaming (only if route has caching enabled and 200 OK)
+    let accumulatedChunks: Buffer[] | null = null;
+    let accumulatedBytes = 0;
+    let isOversized = false;
+    const maxCacheBytes = route.cache?.enabled ? route.cache.maxBodyBytes : 0;
+
+    if (route.cache?.enabled && method === 'GET' && upstreamResponse.statusCode === 200) {
+      accumulatedChunks = [];
+      upstreamResponse.body.on('data', (chunk: Buffer | string) => {
+        if (!isOversized && accumulatedChunks) {
+          const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          accumulatedBytes += buf.length;
+          if (accumulatedBytes <= maxCacheBytes) {
+            accumulatedChunks.push(buf);
+          } else {
+            isOversized = true;
+            accumulatedChunks = null; // Immediate GC if exceeds maxBodyBytes
+          }
+        }
+      });
+    }
+
     // Stream upstream response body directly to client with backpressure
     await pipeline(upstreamResponse.body, reply.raw);
 
     const totalDurationMs = elapsedMsFrom(startTime);
+    const collectedBody = !isOversized && accumulatedChunks ? Buffer.concat(accumulatedChunks) : undefined;
 
     return {
       statusCode: upstreamResponse.statusCode,
       upstreamLatencyMs,
       totalDurationMs,
+      responseHeaders: upstreamResponse.headers,
+      responseBody: collectedBody,
     };
   } catch (err: unknown) {
     clearTimeout(timeoutTimer);

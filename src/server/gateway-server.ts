@@ -6,18 +6,21 @@ import { UpstreamPoolManager } from '../proxy/pool.js';
 import { handleProxyStream } from '../proxy/stream-handler.js';
 import { createLogger, logAccess } from '../logger/logger.js';
 import { normalizeRequestId } from '../utils/uuid.js';
-import { calculateLatencyBreakdown } from '../utils/timing.js';
+import { calculateLatencyBreakdown, elapsedMsFrom } from '../utils/timing.js';
 import {
   createErrorEnvelope,
   GatewayError,
   GatewayErrorCode,
   RouteNotFoundError,
   TooManyRequestsError,
+  CircuitBreakerOpenError,
 } from '../errors/index.js';
 import { AuthManager } from '../auth/auth-manager.js';
 import type { AuthContext } from '../auth/types.js';
 import { RateLimitManager } from '../rate-limit/rate-limit-manager.js';
 import type { RedisClient } from '../rate-limit/redis-client.js';
+import { CacheManager } from '../cache/cache-manager.js';
+import { CircuitManager } from '../circuit-breaker/circuit-manager.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -39,6 +42,8 @@ export class RouteXGatewayServer {
   private readonly poolManager: UpstreamPoolManager;
   private readonly authManager: AuthManager;
   private readonly rateLimitManager: RateLimitManager;
+  private readonly cacheManager: CacheManager;
+  private readonly circuitManager: CircuitManager;
   private isRunning = false;
 
   constructor(
@@ -70,6 +75,23 @@ export class RouteXGatewayServer {
     this.authManager = new AuthManager(this.config.auth ?? {});
     this.rateLimitManager = new RateLimitManager(this.config.redis ?? {}, {
       redisClient: options.redisClient,
+    });
+    this.cacheManager = new CacheManager(this.rateLimitManager.client, {
+      keyPrefix: this.config.redis.keyPrefix,
+    });
+    this.circuitManager = new CircuitManager({
+      onStateChange: (event) => {
+        logger.warn(
+          {
+            type: 'CIRCUIT_STATE_CHANGE',
+            origin: event.origin,
+            previousState: event.previousState,
+            newState: event.newState,
+            failureCount: event.failureCount,
+          },
+          `Circuit state changed for ${event.origin}: ${event.previousState} -> ${event.newState}`
+        );
+      },
     });
 
     this.setupMiddleware();
@@ -248,17 +270,225 @@ export class RouteXGatewayServer {
         return reply.status(envelope.statusCode).send(envelope.envelope);
       }
 
-      // 5. Execute streaming reverse proxy dispatch with verified identity
-      const proxyResult = await handleProxyStream({
-        req,
-        reply,
-        targetUrl: matchResult.targetUrl,
-        route: matchResult.route,
-        poolManager: this.poolManager,
-        requestId,
-        startTime,
-        authContext,
-      });
+      // 5. Response Cache Lookup (Phase 6)
+      const cacheLookup = await this.cacheManager.lookup(req, matchResult.route, authContext);
+      if (cacheLookup.status === 'HIT') {
+        reply.header('x-cache', 'HIT');
+        reply.header('age', String(cacheLookup.ageSec));
+        for (const [k, v] of Object.entries(cacheLookup.entry.headers)) {
+          reply.header(k, v);
+        }
+
+        const totalDurationMs = elapsedMsFrom(startTime);
+        logAccess(rootLogger, {
+          requestId,
+          method: req.method,
+          url: req.url,
+          statusCode: cacheLookup.entry.statusCode,
+          routeId: matchResult.route.id,
+          totalDurationMs,
+          gatewayOverheadMs: totalDurationMs,
+          clientIp: req.ip,
+          userAgent: req.headers['user-agent'],
+          cacheStatus: 'HIT',
+          cacheKeyHash: cacheLookup.cacheKey,
+        });
+
+        return reply.status(cacheLookup.entry.statusCode).send(cacheLookup.entry.body);
+      }
+
+      // 6. Upstream Circuit Breaker Check (Phase 6)
+      const breaker = this.circuitManager.getBreaker(
+        matchResult.targetUrl,
+        matchResult.route.circuitBreaker
+      );
+      const circuitDecision = breaker.beforeRequest();
+
+      if (!circuitDecision.allowed) {
+        const circuitError = new CircuitBreakerOpenError(
+          breaker.origin,
+          circuitDecision.retryAfterSec,
+          { reason: circuitDecision.reason },
+          requestId
+        );
+        const envelope = createErrorEnvelope(circuitError, requestId);
+        for (const [k, v] of Object.entries(envelope.headers)) {
+          reply.header(k, v);
+        }
+
+        const totalDurationMs = elapsedMsFrom(startTime);
+        logAccess(rootLogger, {
+          requestId,
+          method: req.method,
+          url: req.url,
+          statusCode: 503,
+          routeId: matchResult.route.id,
+          totalDurationMs,
+          gatewayOverheadMs: totalDurationMs,
+          clientIp: req.ip,
+          userAgent: req.headers['user-agent'],
+          circuitState: circuitDecision.state,
+          circuitRejected: true,
+        });
+
+        return reply.status(503).send(envelope.envelope);
+      }
+
+      // Set initial cache header (MISS or BYPASS)
+      if (cacheLookup.status === 'MISS') {
+        reply.header('x-cache', 'MISS');
+      } else {
+        reply.header('x-cache', 'BYPASS');
+      }
+
+      // 7. Reverse Proxy Dispatch (with single-flight stampede protection on cache MISS)
+      if (cacheLookup.status === 'MISS' && cacheLookup.cacheKey) {
+        let isLeader = false;
+        const cacheKey = cacheLookup.cacheKey;
+
+        const flightPromise = this.cacheManager.executeSingleFlight(cacheKey, async () => {
+          isLeader = true;
+          try {
+            const result = await handleProxyStream({
+              req,
+              reply,
+              targetUrl: matchResult.targetUrl,
+              route: matchResult.route,
+              poolManager: this.poolManager,
+              requestId,
+              startTime,
+              authContext,
+            });
+
+            if (result.statusCode >= 500) {
+              breaker.onFailure(result.statusCode);
+            } else {
+              breaker.onSuccess();
+            }
+
+            let savedEntry = null;
+            if (result.statusCode === 200 && result.responseBody) {
+              await this.cacheManager.store(
+                cacheKey,
+                result.statusCode,
+                result.responseHeaders ?? {},
+                result.responseBody,
+                matchResult.route.cache
+              );
+              savedEntry = {
+                statusCode: result.statusCode,
+                headers: result.responseHeaders ?? {},
+                body: result.responseBody.toString('utf-8'),
+              };
+            }
+
+            return {
+              statusCode: result.statusCode,
+              upstreamLatencyMs: result.upstreamLatencyMs,
+              totalDurationMs: result.totalDurationMs,
+              savedEntry,
+            };
+          } catch (err: unknown) {
+            breaker.onFailure(err instanceof Error ? err : new Error(String(err)));
+            throw err;
+          }
+        });
+
+        const flightResult = await flightPromise;
+
+        if (isLeader) {
+          const breakdown = calculateLatencyBreakdown({
+            totalDurationMs: flightResult.totalDurationMs,
+            upstreamLatencyMs: flightResult.upstreamLatencyMs,
+          });
+
+          logAccess(rootLogger, {
+            requestId,
+            method: req.method,
+            url: req.url,
+            statusCode: flightResult.statusCode,
+            routeId: matchResult.route.id,
+            totalDurationMs: breakdown.totalDurationMs,
+            upstreamLatencyMs: breakdown.upstreamLatencyMs,
+            gatewayOverheadMs: breakdown.gatewayOverheadMs,
+            clientIp: req.ip,
+            userAgent: req.headers['user-agent'],
+            cacheStatus: 'MISS',
+            cacheKeyHash: cacheKey,
+            circuitState: breaker.state,
+            circuitRejected: false,
+          });
+
+          return reply;
+        } else {
+          // Follower request: serve cached response directly without duplicate upstream fetch
+          reply.header('x-cache', 'HIT');
+          if (flightResult.savedEntry) {
+            for (const [k, v] of Object.entries(flightResult.savedEntry.headers)) {
+              if (v !== undefined) {
+                reply.header(k, v);
+              }
+            }
+
+            const totalDurationMs = elapsedMsFrom(startTime);
+            logAccess(rootLogger, {
+              requestId,
+              method: req.method,
+              url: req.url,
+              statusCode: flightResult.savedEntry.statusCode,
+              routeId: matchResult.route.id,
+              totalDurationMs,
+              gatewayOverheadMs: totalDurationMs,
+              clientIp: req.ip,
+              userAgent: req.headers['user-agent'],
+              cacheStatus: 'HIT',
+              cacheKeyHash: cacheKey,
+              circuitState: breaker.state,
+              circuitRejected: false,
+            });
+
+            return reply
+              .status(flightResult.savedEntry.statusCode)
+              .send(flightResult.savedEntry.body);
+          } else {
+            return await handleProxyStream({
+              req,
+              reply,
+              targetUrl: matchResult.targetUrl,
+              route: matchResult.route,
+              poolManager: this.poolManager,
+              requestId,
+              startTime,
+              authContext,
+            });
+          }
+        }
+      }
+
+      // Default non-cacheable streaming dispatch
+      let proxyResult;
+      try {
+        proxyResult = await handleProxyStream({
+          req,
+          reply,
+          targetUrl: matchResult.targetUrl,
+          route: matchResult.route,
+          poolManager: this.poolManager,
+          requestId,
+          startTime,
+          authContext,
+        });
+
+        // Record Circuit Breaker feedback
+        if (proxyResult.statusCode >= 500) {
+          breaker.onFailure(proxyResult.statusCode);
+        } else {
+          breaker.onSuccess();
+        }
+      } catch (err: unknown) {
+        breaker.onFailure(err instanceof Error ? err : new Error(String(err)));
+        throw err;
+      }
 
       const breakdown = calculateLatencyBreakdown({
         totalDurationMs: proxyResult.totalDurationMs,
@@ -277,6 +507,10 @@ export class RouteXGatewayServer {
         gatewayOverheadMs: breakdown.gatewayOverheadMs,
         clientIp: req.ip,
         userAgent: req.headers['user-agent'],
+        cacheStatus: cacheLookup.status,
+        cacheKeyHash: cacheLookup.cacheKey,
+        circuitState: breaker.state,
+        circuitRejected: false,
       });
 
       return reply;
@@ -311,12 +545,14 @@ export class RouteXGatewayServer {
     if (!this.isRunning && !this.app.server.listening) {
       await this.rateLimitManager.close();
       await this.poolManager.close();
+      this.circuitManager.resetAll();
       return;
     }
     this.isRunning = false;
     await this.app.close();
     await this.rateLimitManager.close();
     await this.poolManager.close();
+    this.circuitManager.resetAll();
   }
 
   /**
@@ -338,6 +574,20 @@ export class RouteXGatewayServer {
    */
   public get rateLimit(): RateLimitManager {
     return this.rateLimitManager;
+  }
+
+  /**
+   * Get underlying CacheManager instance.
+   */
+  public get cache(): CacheManager {
+    return this.cacheManager;
+  }
+
+  /**
+   * Get underlying CircuitManager instance.
+   */
+  public get circuitBreakers(): CircuitManager {
+    return this.circuitManager;
   }
 }
 

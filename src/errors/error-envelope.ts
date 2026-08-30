@@ -1,6 +1,6 @@
 import { ZodError } from 'zod';
 import { GatewayErrorCode } from './error-codes.js';
-import { GatewayError, TooManyRequestsError, ServiceUnavailableError } from './gateway-error.js';
+import { GatewayError, TooManyRequestsError, ServiceUnavailableError, CircuitBreakerOpenError } from './gateway-error.js';
 import type { ErrorEnvelope } from '../types/index.js';
 
 export interface FormattedErrorResponse {
@@ -26,6 +26,8 @@ export function createErrorEnvelope(
     if (error instanceof TooManyRequestsError && error.retryAfterSec !== undefined) {
       headers['retry-after'] = String(error.retryAfterSec);
     } else if (error instanceof ServiceUnavailableError && error.retryAfterSec !== undefined) {
+      headers['retry-after'] = String(error.retryAfterSec);
+    } else if (error instanceof CircuitBreakerOpenError && error.retryAfterSec !== undefined) {
       headers['retry-after'] = String(error.retryAfterSec);
     }
 

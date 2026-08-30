@@ -28,6 +28,10 @@ export interface AccessLogData {
   readonly clientIp?: string | undefined;
   readonly userAgent?: string | undefined;
   readonly contentLength?: number | undefined;
+  readonly cacheStatus?: 'HIT' | 'MISS' | 'BYPASS' | 'STORE_FAILED' | undefined;
+  readonly cacheKeyHash?: string | undefined;
+  readonly circuitState?: 'CLOSED' | 'OPEN' | 'HALF_OPEN' | undefined;
+  readonly circuitRejected?: boolean | undefined;
 }
 
 const DEFAULT_REDACT_PATHS = [
@@ -148,5 +152,9 @@ export function logAccess(logger: Logger, data: AccessLogData): void {
     clientIp: data.clientIp ?? 'unknown',
     userAgent: data.userAgent ?? 'unknown',
     contentLength: data.contentLength,
+    ...(data.cacheStatus ? { cache_status: data.cacheStatus } : {}),
+    ...(data.cacheKeyHash ? { cache_key_hash: data.cacheKeyHash } : {}),
+    ...(data.circuitState ? { circuit_state: data.circuitState } : {}),
+    ...(data.circuitRejected !== undefined ? { circuit_rejected: data.circuitRejected } : {}),
   }, `${data.method} ${data.url} ${data.statusCode} in ${data.totalDurationMs}ms (gw: ${data.gatewayOverheadMs ?? 0}ms, up: ${data.upstreamLatencyMs ?? 0}ms)`);
 }
