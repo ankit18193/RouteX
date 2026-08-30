@@ -38,12 +38,12 @@ export interface GatewayServerOptions {
 export class RouteXGatewayServer {
   public readonly config: GatewayConfig;
   private readonly app: FastifyInstance;
-  private readonly router: ProxyRouter;
-  private readonly poolManager: UpstreamPoolManager;
-  private readonly authManager: AuthManager;
-  private readonly rateLimitManager: RateLimitManager;
-  private readonly cacheManager: CacheManager;
-  private readonly circuitManager: CircuitManager;
+  public readonly router: ProxyRouter;
+  public readonly poolManager: UpstreamPoolManager;
+  public readonly authManager: AuthManager;
+  public readonly rateLimitManager: RateLimitManager;
+  public readonly cacheManager: CacheManager;
+  public readonly circuitManager: CircuitManager;
   private isRunning = false;
   private isShuttingDown = false;
 

@@ -9,7 +9,7 @@ import type { StateChangeCallback } from './circuit-state.js';
 
 export class CircuitBreaker {
   public readonly origin: string;
-  private readonly config: CircuitBreakerConfig;
+  private config: CircuitBreakerConfig;
   private readonly onStateChange?: StateChangeCallback | undefined;
 
   private currentState: CircuitState = 'CLOSED';
@@ -27,6 +27,10 @@ export class CircuitBreaker {
     this.origin = origin;
     this.config = config;
     this.onStateChange = onStateChange;
+  }
+
+  public updateConfig(config: CircuitBreakerConfig): void {
+    this.config = config;
   }
 
   /**

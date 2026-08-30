@@ -36,6 +36,8 @@ export class CircuitManager {
         this.onStateChange
       );
       this.breakers.set(origin, breaker);
+    } else if (config) {
+      breaker.updateConfig(config);
     }
 
     return breaker;
