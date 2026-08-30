@@ -86,6 +86,7 @@ export function loadGatewayConfig(options: LoadConfigOptions = {}): GatewayConfi
 
   const rawServer = isRecord(rawConfigRecord.server) ? rawConfigRecord.server : {};
   const rawRedis = isRecord(rawConfigRecord.redis) ? rawConfigRecord.redis : {};
+  const rawAuth = isRecord(rawConfigRecord.auth) ? rawConfigRecord.auth : undefined;
 
   const candidateConfig = {
     server: {
@@ -96,6 +97,7 @@ export function loadGatewayConfig(options: LoadConfigOptions = {}): GatewayConfi
       ...rawRedis,
       ...redisOverrides,
     },
+    auth: rawAuth,
     routes: mergedRoutes,
   };
 

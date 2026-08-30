@@ -4,8 +4,13 @@
   "description": "Production-grade API Gateway and Reverse Proxy built with Node.js and TypeScript",
   "type": "module",
   "main": "dist/src/index.js",
-  "types": "dist/src/index.d.ts",
+  "bin": {
+    "routex": "dist/src/bin/gateway.js"
+  },
   "scripts": {
+    "start": "node dist/src/bin/gateway.js",
+    "start:user": "node dist/src/bin/mock-user.js",
+    "start:chat": "node dist/src/bin/mock-chat.js",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

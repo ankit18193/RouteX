@@ -1,0 +1,31 @@
+# RouteX Gateway Docker Compose Configuration
+
+server:
+  port: 8080
+  host: 0.0.0.0
+  requestTimeoutMs: 10000
+  headersTimeoutMs: 11000
+  maxHeaderSize: 16384
+  trustedProxies:
+    - 127.0.0.1
+    - ::1
+    - 172.16.0.0/12
+    - 10.0.0.0/8
+  logLevel: info
+  logFormat: json
+
+redis:
+  host: redis
+  port: 6379
+  db: 0
+  connectTimeoutMs: 3000
+  keyPrefix: "routex:"
+
+auth:
+  jwt:
+    enabled: true
+    hs256Secret: "routex-dev-super-secret-key-for-testing-at-least-32-chars-long!"
+  apiKey:
+    enabled: true
+    headerName: "x-api-key"
+    cacheTtlSec: 300
