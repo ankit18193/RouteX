@@ -747,6 +747,7 @@ All functionality is driven declaratively through [`config/routes.docker.yaml`](
 | **Phase 5** | **Distributed Rate Limiting** | Two-tier atomic Redis Sliding Window Log via custom Lua scripts (`EVALSHA` / `NOSCRIPT` fallback), Tier-1 IP protection, Tier-2 authenticated Identity limits, per-route subscription tiers (`free`, `premium`), `X-RateLimit-*` & `Retry-After` RFC-compliant headers. |
 | **Phase 6** | **Cache & Circuit Breaker** | Distributed Redis HTTP response caching, deterministic query-sorted cache keys, SingleFlight cache stampede protection (coalescing 50+ concurrent requests into 1 upstream fetch), per-origin Circuit Breaker state machine (`CLOSED` $\rightarrow$ `OPEN` $\rightarrow$ `HALF_OPEN`) with origin isolation. |
 | **Phase 7** | **Production Delivery** | Multi-stage production `Dockerfile`, `docker-compose.yml`, health probes (`/healthz`, `/livez`, `/readyz`), graceful socket draining, 15MB+ streaming memory verification (< 35MB growth), 300+ automated end-to-end acceptance tests. |
+| **Phase 8** | **Realtime Edge Integration** | Full RFC 6455 bidirectional WebSocket proxying, pre-101 connect-time failover across multi-node upstreams, active upstream /readyz health tracking & round-robin routing, edge rate limiting & JWT verification on upgrade, protocol/extension negotiation preservation, and half-duplex graceful connection draining. |
 
 ---
 
@@ -995,7 +996,7 @@ RouteX enforces zero-buffer streaming across request upload and response downloa
 To run the complete automated test suite (unit, integration, and E2E acceptance tests):
 
 ```bash
-# Run all unit, integration, and E2E tests (38 suites, 300 tests)
+# Run all unit, integration, and E2E tests (40 suites, 316 tests)
 npm test
 
 # Run tests with V8 code coverage report (>91.8% coverage)
