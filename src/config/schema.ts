@@ -125,7 +125,8 @@ export const RouteTimeoutPolicySchema = z.object({
   responseTimeoutMs: z.number().int().min(50).max(120000).default(3000),
 });
 
-export const RouteDefinitionSchema = z.object({
+export const RouteDefinitionSchema = z
+  .object({
     id: z
       .string()
       .min(1)
@@ -139,13 +140,26 @@ export const RouteDefinitionSchema = z.object({
         (val) => val === '/' || !val.endsWith('/'),
         'pathPrefix must not have a trailing slash unless it is exactly "/"'
       ),
-  upstream: z
-    .string()
-    .url('upstream must be a valid URL')
-    .refine(
-      (val) => val.startsWith('http://') || val.startsWith('https://'),
-      'upstream protocol must be http:// or https://'
-    ),
+    upstream: z
+      .string()
+      .url('upstream must be a valid URL')
+      .refine(
+        (val) => val.startsWith('http://') || val.startsWith('https://'),
+        'upstream protocol must be http:// or https://'
+      )
+      .optional(),
+    upstreams: z
+      .array(
+        z
+          .string()
+          .url('each upstream must be a valid URL')
+          .refine(
+            (val) => val.startsWith('http://') || val.startsWith('https://'),
+            'upstream protocol must be http:// or https://'
+          )
+      )
+      .min(1, 'upstreams array must not be empty')
+      .optional(),
     stripPrefix: z.boolean().default(false),
     websocket: z.boolean().optional(),
     methods: z.array(HttpMethodSchema).min(1, 'methods array must not be empty').default([
@@ -165,7 +179,14 @@ export const RouteDefinitionSchema = z.object({
       connectTimeoutMs: 1000,
       responseTimeoutMs: 3000,
     }),
-  });
+  })
+  .refine(
+    (data) => data.upstream !== undefined || (data.upstreams !== undefined && data.upstreams.length > 0),
+    {
+      message: 'Either upstream or upstreams must be provided',
+      path: ['upstream'],
+    }
+  );
 
 export const RoutesListSchema = z
   .array(RouteDefinitionSchema)

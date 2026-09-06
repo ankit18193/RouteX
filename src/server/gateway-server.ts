@@ -4,6 +4,7 @@ import { GatewayConfigSchema } from '../config/schema.js';
 import { ProxyRouter } from '../proxy/router.js';
 import { UpstreamPoolManager } from '../proxy/pool.js';
 import { WebSocketProxyHandler } from '../proxy/websocket.js';
+import { UpstreamHealthTracker } from '../proxy/upstream-health.js';
 import { handleProxyStream } from '../proxy/stream-handler.js';
 import { createLogger, logAccess } from '../logger/logger.js';
 import { normalizeRequestId } from '../utils/uuid.js';
@@ -45,6 +46,7 @@ export class RouteXGatewayServer {
   public readonly rateLimitManager: RateLimitManager;
   public readonly cacheManager: CacheManager;
   public readonly circuitManager: CircuitManager;
+  public readonly healthTracker: UpstreamHealthTracker;
   public readonly webSocketHandler: WebSocketProxyHandler;
   private isRunning = false;
   private isShuttingDown = false;
@@ -82,8 +84,18 @@ export class RouteXGatewayServer {
     this.cacheManager = new CacheManager(this.rateLimitManager.client, {
       keyPrefix: this.config.redis.keyPrefix,
     });
+    this.healthTracker = new UpstreamHealthTracker({
+      checkIntervalMs: 2000,
+      checkTimeoutMs: 1000,
+      logger,
+    });
+    for (const route of this.config.routes) {
+      const urls = route.upstreams ?? (route.upstream ? [route.upstream] : []);
+      this.healthTracker.register(urls);
+    }
     this.webSocketHandler = new WebSocketProxyHandler({
       router: this.router,
+      healthTracker: this.healthTracker,
       rateLimitManager: this.rateLimitManager,
       authManager: this.authManager,
       logger,
@@ -626,6 +638,7 @@ export class RouteXGatewayServer {
       (rawServer as any).closeIdleConnections();
     }
 
+    this.healthTracker.stop();
     await this.webSocketHandler.closeAll(5000);
     await this.app.close();
     await this.rateLimitManager.close();
@@ -664,6 +677,9 @@ export class RouteXGatewayServer {
   /**
    * Get underlying CircuitManager instance.
    */
+  public get health(): UpstreamHealthTracker {
+    return this.healthTracker;
+  }
 
   public get webSockets(): WebSocketProxyHandler {
     return this.webSocketHandler;

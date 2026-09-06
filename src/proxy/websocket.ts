@@ -4,6 +4,7 @@ import https from 'node:https';
 import type { Duplex } from 'node:stream';
 import net from 'node:net';
 import type { ProxyRouter } from './router.js';
+import type { UpstreamHealthTracker } from './upstream-health.js';
 import type { RateLimitManager } from '../rate-limit/rate-limit-manager.js';
 import type { AuthManager } from '../auth/auth-manager.js';
 import { sanitizeWebSocketUpgradeHeaders } from './headers.js';
@@ -12,6 +13,7 @@ import type { Logger } from 'pino';
 
 export interface WebSocketProxyOptions {
   readonly router: ProxyRouter;
+  readonly healthTracker?: UpstreamHealthTracker | undefined;
   readonly rateLimitManager?: RateLimitManager | undefined;
   readonly authManager?: AuthManager | undefined;
   readonly logger?: Logger | undefined;
@@ -59,6 +61,7 @@ export function normalizeClientIp(rawIp: string | undefined): string {
 
 export class WebSocketProxyHandler {
   private readonly router: ProxyRouter;
+  private readonly healthTracker?: UpstreamHealthTracker | undefined;
   private readonly rateLimitManager?: RateLimitManager | undefined;
   private readonly authManager?: AuthManager | undefined;
   private readonly logger?: Logger | undefined;
@@ -67,6 +70,7 @@ export class WebSocketProxyHandler {
 
   constructor(options: WebSocketProxyOptions) {
     this.router = options.router;
+    this.healthTracker = options.healthTracker;
     this.rateLimitManager = options.rateLimitManager;
     this.authManager = options.authManager;
     this.logger = options.logger;
@@ -226,28 +230,21 @@ export class WebSocketProxyHandler {
       }
     }
 
-    // 5. Connect to upstream WebSocket server
-    const targetUrl = matchResult.targetUrl;
-    const parsedTarget = new URL(targetUrl);
-    const isHttps = parsedTarget.protocol === 'https:';
-    const clientLib = isHttps ? https : http;
+    // 5. Candidate upstream determination & bounded pre-101 connect-time failover
+    const candidateUpstreams: string[] =
+      route.upstreams && route.upstreams.length > 0
+        ? route.upstreams
+        : [route.upstream ?? matchResult.targetUrl];
 
-    const sanitizedHeaders = sanitizeWebSocketUpgradeHeaders(req.headers, {
-      clientIp,
-      requestId,
-      targetHost: parsedTarget.host,
-      originalHost: typeof req.headers['host'] === 'string' ? req.headers['host'] : undefined,
-      proto: isHttps ? 'https' : 'http',
-      authContext,
-    });
-
-    const timeoutMs = route.timeouts?.connectTimeoutMs ?? this.defaultUpgradeTimeoutMs;
+    const maxAttempts = Math.min(2, candidateUpstreams.length);
+    const attemptedUpstreams = new Set<string>();
 
     return new Promise<void>((resolve) => {
       let isHandshakeComplete = false;
       let activeUpstreamReq: http.ClientRequest | undefined;
       let timeoutTimer: NodeJS.Timeout | undefined;
 
+      // Handle client socket premature abort during handshake
       const onClientAbort = () => {
         if (!isHandshakeComplete) {
           if (timeoutTimer) clearTimeout(timeoutTimer);
@@ -260,172 +257,288 @@ export class WebSocketProxyHandler {
       clientSocket.once('close', onClientAbort);
       clientSocket.once('error', onClientAbort);
 
-      state = 'CONNECTING';
-
-      timeoutTimer = setTimeout(() => {
-        if (!isHandshakeComplete && state === 'CONNECTING') {
-          upstreamReq.destroy();
-          this.writeErrorAndClose(
-            clientSocket,
-            504,
-            'Gateway Timeout',
-            `WebSocket upgrade connection to upstream '${route.id}' timed out after ${timeoutMs}ms`,
-            requestId
-          );
+      const attemptConnect = (attemptNumber: number) => {
+        if (isHandshakeComplete || clientSocket.destroyed) {
           resolve();
+          return;
         }
-      }, timeoutMs);
 
-      const requestPath = `${parsedTarget.pathname}${parsedTarget.search}`;
+        // Select next READY candidate (skipping already attempted upstreams)
+        const selectedUpstream =
+          this.healthTracker?.selectUpstream(route.id, candidateUpstreams, attemptedUpstreams) ??
+          candidateUpstreams.find((u) => !attemptedUpstreams.has(u)) ??
+          candidateUpstreams[0]!;
 
-      const upstreamReq = clientLib.request({
-        hostname: parsedTarget.hostname,
-        port: parsedTarget.port ? Number(parsedTarget.port) : (isHttps ? 443 : 80),
-        path: requestPath,
-        method: 'GET',
-        headers: sanitizedHeaders,
-      });
-      activeUpstreamReq = upstreamReq;
+        attemptedUpstreams.add(selectedUpstream);
+        state = 'CONNECTING';
 
-      upstreamReq.on('error', (err) => {
-        if (timeoutTimer) clearTimeout(timeoutTimer);
+        const targetUrl = this.router.buildTargetUrl(route, urlPath, search, selectedUpstream);
+        const parsedTarget = new URL(targetUrl);
+        const isHttps = parsedTarget.protocol === 'https:';
+        const clientLib = isHttps ? https : http;
 
-        if (!isHandshakeComplete && state === 'CONNECTING') {
-          clientSocket.off('close', onClientAbort);
-          clientSocket.off('error', onClientAbort);
-          this.writeErrorAndClose(
-            clientSocket,
-            502,
-            'Bad Gateway',
-            `Failed to connect to upstream WebSocket server: ${err.message}`,
-            requestId
-          );
-          resolve();
-        }
-      });
+        const sanitizedHeaders = sanitizeWebSocketUpgradeHeaders(req.headers, {
+          clientIp,
+          requestId,
+          targetHost: parsedTarget.host,
+          originalHost: typeof req.headers['host'] === 'string' ? req.headers['host'] : undefined,
+          proto: isHttps ? 'https' : 'http',
+          authContext,
+        });
 
-      upstreamReq.on('response', (upstreamRes) => {
-        if (timeoutTimer) clearTimeout(timeoutTimer);
+        const timeoutMs = route.timeouts?.connectTimeoutMs ?? this.defaultUpgradeTimeoutMs;
 
-        isHandshakeComplete = true;
-        clientSocket.off('close', onClientAbort);
-        clientSocket.off('error', onClientAbort);
+        timeoutTimer = setTimeout(() => {
+          if (!isHandshakeComplete && state === 'CONNECTING') {
+            upstreamReq.destroy();
+            this.healthTracker?.markDegraded(selectedUpstream, 'Connect timeout');
 
-        const statusCode = upstreamRes.statusCode ?? 502;
-        const statusMessage = upstreamRes.statusMessage ?? 'Bad Gateway';
-        const headers: string[] = [`HTTP/1.1 ${statusCode} ${statusMessage}`];
-
-        for (const [k, v] of Object.entries(upstreamRes.headers)) {
-          if (v !== undefined) {
-            if (Array.isArray(v)) {
-              for (const item of v) headers.push(`${k}: ${item}`);
+            if (attemptNumber < maxAttempts && !clientSocket.destroyed) {
+              this.logger?.warn(
+                { routeId: route.id, failedUpstream: selectedUpstream, attempt: attemptNumber, requestId },
+                'Pre-101 connect timeout; attempting failover to next upstream'
+              );
+              attemptConnect(attemptNumber + 1);
             } else {
-              headers.push(`${k}: ${v}`);
+              this.writeErrorAndClose(
+                clientSocket,
+                504,
+                'Gateway Timeout',
+                `WebSocket upgrade connection to upstream '${route.id}' timed out after ${timeoutMs}ms`,
+                requestId
+              );
+              resolve();
             }
           }
-        }
-        headers.push(`X-Request-Id: ${requestId}`);
+        }, timeoutMs);
 
-        clientSocket.write(headers.join('\r\n') + '\r\n\r\n');
-        upstreamRes.pipe(clientSocket);
-        upstreamRes.on('end', () => {
-          clientSocket.end();
-          resolve();
+        const requestPath = `${parsedTarget.pathname}${parsedTarget.search}`;
+
+        const upstreamReq = clientLib.request({
+          hostname: parsedTarget.hostname,
+          port: parsedTarget.port ? Number(parsedTarget.port) : (isHttps ? 443 : 80),
+          path: requestPath,
+          method: 'GET',
+          headers: sanitizedHeaders,
         });
-      });
+        activeUpstreamReq = upstreamReq;
 
-      upstreamReq.on('upgrade', (upstreamRes, upstreamSocket, upstreamHead) => {
-        isHandshakeComplete = true;
-        if (timeoutTimer) clearTimeout(timeoutTimer);
-        clientSocket.off('close', onClientAbort);
-        clientSocket.off('error', onClientAbort);
+        // Handle upstream connect / network error before 101
+        upstreamReq.on('error', (err) => {
+          if (timeoutTimer) clearTimeout(timeoutTimer);
 
-        state = 'UPGRADED';
+          if (!isHandshakeComplete && state === 'CONNECTING') {
+            this.healthTracker?.markDegraded(selectedUpstream, err.message);
 
-        const headers: string[] = [
-          'HTTP/1.1 101 Switching Protocols',
-          'Upgrade: websocket',
-          'Connection: Upgrade',
-        ];
+            // Bounded pre-101 retry (at most 1 failover retry)
+            if (attemptNumber < maxAttempts && !clientSocket.destroyed) {
+              this.logger?.warn(
+                { err: err.message, routeId: route.id, failedUpstream: selectedUpstream, attempt: attemptNumber, requestId },
+                'Pre-101 upstream connection failure; failing over to next READY upstream'
+              );
+              attemptConnect(attemptNumber + 1);
+            } else {
+              clientSocket.off('close', onClientAbort);
+              clientSocket.off('error', onClientAbort);
+              this.writeErrorAndClose(
+                clientSocket,
+                502,
+                'Bad Gateway',
+                `Failed to connect to upstream WebSocket server: ${err.message}`,
+                requestId
+              );
+              resolve();
+            }
+          }
+        });
 
-        if (upstreamRes.headers['sec-websocket-accept']) {
-          headers.push(`Sec-WebSocket-Accept: ${upstreamRes.headers['sec-websocket-accept']}`);
-        }
-        if (upstreamRes.headers['sec-websocket-protocol']) {
-          headers.push(`Sec-WebSocket-Protocol: ${upstreamRes.headers['sec-websocket-protocol']}`);
-        }
-        if (upstreamRes.headers['sec-websocket-extensions']) {
-          headers.push(`Sec-WebSocket-Extensions: ${upstreamRes.headers['sec-websocket-extensions']}`);
-        }
-        headers.push(`X-Request-Id: ${requestId}`);
+        // Handle upstream non-101 response (e.g. 401 Unauthorized or 503 Service Unavailable)
+        upstreamReq.on('response', (upstreamRes) => {
+          if (timeoutTimer) clearTimeout(timeoutTimer);
 
-        clientSocket.write(headers.join('\r\n') + '\r\n\r\n');
+          const statusCode = upstreamRes.statusCode ?? 502;
 
-        if (upstreamHead && upstreamHead.length > 0) clientSocket.write(upstreamHead);
-        if (head && head.length > 0) upstreamSocket.write(head);
+          // If upstream returns 5xx (e.g. 503 draining / 502 bad gateway) before 101:
+          // Treat as connect-time failure and attempt pre-101 failover to next candidate
+          if (statusCode >= 500 && attemptNumber < maxAttempts && !clientSocket.destroyed) {
+            upstreamRes.resume();
+            this.healthTracker?.markDegraded(selectedUpstream, `Upstream returned HTTP ${statusCode}`);
+            this.logger?.warn(
+              { statusCode, routeId: route.id, failedUpstream: selectedUpstream, attempt: attemptNumber, requestId },
+              'Pre-101 upstream 5xx response; failing over to next READY upstream'
+            );
+            attemptConnect(attemptNumber + 1);
+            return;
+          }
 
-        if (typeof (clientSocket as any).setNoDelay === 'function') (clientSocket as any).setNoDelay(true);
-        if (typeof (upstreamSocket as any).setNoDelay === 'function') (upstreamSocket as any).setNoDelay(true);
-        if (typeof (clientSocket as any).setKeepAlive === 'function') (clientSocket as any).setKeepAlive(true, 10000);
-        if (typeof (upstreamSocket as any).setKeepAlive === 'function') (upstreamSocket as any).setKeepAlive(true, 10000);
+          isHandshakeComplete = true;
+          clientSocket.off('close', onClientAbort);
+          clientSocket.off('error', onClientAbort);
 
-        state = 'ACTIVE_TUNNEL';
+          const statusMessage = upstreamRes.statusMessage ?? 'Bad Gateway';
+          const headers: string[] = [`HTTP/1.1 ${statusCode} ${statusMessage}`];
 
-        const tunnel: ActiveTunnel = {
-          id: requestId,
-          routeId: route.id,
-          clientIp,
-          targetUrl,
-          clientSocket,
-          upstreamSocket,
-          startedAt: Date.now(),
-        };
+          for (const [k, v] of Object.entries(upstreamRes.headers)) {
+            if (v !== undefined) {
+              if (Array.isArray(v)) {
+                for (const item of v) {
+                  headers.push(`${k}: ${item}`);
+                }
+              } else {
+                headers.push(`${k}: ${v}`);
+              }
+            }
+          }
+          headers.push(`X-Request-Id: ${requestId}`);
 
-        this.activeTunnels.add(tunnel);
+          clientSocket.write(headers.join('\r\n') + '\r\n\r\n');
+          upstreamRes.pipe(clientSocket);
+          upstreamRes.on('end', () => {
+            clientSocket.end();
+            resolve();
+          });
+        });
 
-        this.logger?.info(
-          { event: 'WEBSOCKET_TUNNEL_ESTABLISHED', requestId, routeId: route.id, clientIp, targetUrl },
-          `WebSocket tunnel active: ${route.id} -> ${targetUrl}`
-        );
+        // Handle upstream 101 Switching Protocols
+        upstreamReq.on('upgrade', (upstreamRes, upstreamSocket, upstreamHead) => {
+          isHandshakeComplete = true;
+          if (timeoutTimer) clearTimeout(timeoutTimer);
+          clientSocket.off('close', onClientAbort);
+          clientSocket.off('error', onClientAbort);
 
-        clientSocket.pipe(upstreamSocket);
-        upstreamSocket.pipe(clientSocket);
+          // Mark upstream healthy upon successful upgrade
+          this.healthTracker?.markHealthy(selectedUpstream);
 
-        let isCleanedUp = false;
-        const cleanup = () => {
-          if (isCleanedUp) return;
-          isCleanedUp = true;
-          state = 'CLOSED';
-          this.activeTunnels.delete(tunnel);
-          if (!clientSocket.destroyed) clientSocket.destroy();
-          if (!upstreamSocket.destroyed) upstreamSocket.destroy();
+          state = 'UPGRADED';
+
+          // 1. Build HTTP 101 response line and forward upstream headers
+          const headers: string[] = [
+            'HTTP/1.1 101 Switching Protocols',
+            'Upgrade: websocket',
+            'Connection: Upgrade',
+          ];
+
+          if (upstreamRes.headers['sec-websocket-accept']) {
+            headers.push(`Sec-WebSocket-Accept: ${upstreamRes.headers['sec-websocket-accept']}`);
+          }
+          if (upstreamRes.headers['sec-websocket-protocol']) {
+            headers.push(`Sec-WebSocket-Protocol: ${upstreamRes.headers['sec-websocket-protocol']}`);
+          }
+          if (upstreamRes.headers['sec-websocket-extensions']) {
+            headers.push(`Sec-WebSocket-Extensions: ${upstreamRes.headers['sec-websocket-extensions']}`);
+          }
+          headers.push(`X-Request-Id: ${requestId}`);
+
+          // Write 101 Switching Protocols to client
+          clientSocket.write(headers.join('\r\n') + '\r\n\r\n');
+
+          // 2. Forward upstreamHead buffer if present
+          if (upstreamHead && upstreamHead.length > 0) {
+            clientSocket.write(upstreamHead);
+          }
+
+          // 3. Forward client head buffer if present
+          if (head && head.length > 0) {
+            upstreamSocket.write(head);
+          }
+
+          // 4. Configure socket flags
+          if (typeof (clientSocket as any).setNoDelay === 'function') {
+            (clientSocket as any).setNoDelay(true);
+          }
+          if (typeof (upstreamSocket as any).setNoDelay === 'function') {
+            (upstreamSocket as any).setNoDelay(true);
+          }
+          if (typeof (clientSocket as any).setKeepAlive === 'function') {
+            (clientSocket as any).setKeepAlive(true, 10000);
+          }
+          if (typeof (upstreamSocket as any).setKeepAlive === 'function') {
+            (upstreamSocket as any).setKeepAlive(true, 10000);
+          }
+
+          // 5. Transition to ACTIVE_TUNNEL:
+          // STRICT INVARIANT: Zero retry, zero upstream reselection, zero duplication
+          state = 'ACTIVE_TUNNEL';
+
+          const tunnel: ActiveTunnel = {
+            id: requestId,
+            routeId: route.id,
+            clientIp,
+            targetUrl,
+            clientSocket,
+            upstreamSocket,
+            startedAt: Date.now(),
+          };
+
+          this.activeTunnels.add(tunnel);
+
           this.logger?.info(
-            { event: 'WEBSOCKET_TUNNEL_CLOSED', requestId, routeId: route.id, durationMs: Date.now() - tunnel.startedAt },
-            `WebSocket tunnel closed: ${route.id}`
+            {
+              event: 'WEBSOCKET_TUNNEL_ESTABLISHED',
+              requestId,
+              routeId: route.id,
+              clientIp,
+              targetUrl,
+            },
+            `WebSocket tunnel active: ${route.id} -> ${targetUrl}`
           );
-          resolve();
-        };
 
-        clientSocket.on('end', () => {
-          if (!upstreamSocket.destroyed && upstreamSocket.writable) upstreamSocket.end();
-        });
-        upstreamSocket.on('end', () => {
-          if (!clientSocket.destroyed && clientSocket.writable) clientSocket.end();
+          // 6. Native bidirectional stream piping
+          clientSocket.pipe(upstreamSocket);
+          upstreamSocket.pipe(clientSocket);
+
+          // 7. Cleanup & mutual teardown with half-duplex end()
+          let isCleanedUp = false;
+          const cleanup = () => {
+            if (isCleanedUp) return;
+            isCleanedUp = true;
+            state = 'CLOSED';
+            this.activeTunnels.delete(tunnel);
+
+            if (!clientSocket.destroyed) clientSocket.destroy();
+            if (!upstreamSocket.destroyed) upstreamSocket.destroy();
+
+            this.logger?.info(
+              {
+                event: 'WEBSOCKET_TUNNEL_CLOSED',
+                requestId,
+                routeId: route.id,
+                durationMs: Date.now() - tunnel.startedAt,
+              },
+              `WebSocket tunnel closed: ${route.id}`
+            );
+            resolve();
+          };
+
+          // Half-duplex end propagation
+          clientSocket.on('end', () => {
+            if (!upstreamSocket.destroyed && upstreamSocket.writable) {
+              upstreamSocket.end();
+            }
+          });
+          upstreamSocket.on('end', () => {
+            if (!clientSocket.destroyed && clientSocket.writable) {
+              clientSocket.end();
+            }
+          });
+
+          clientSocket.on('close', cleanup);
+          clientSocket.on('error', (err) => {
+            this.logger?.debug({ err: err.message, requestId }, 'Client socket error in active tunnel');
+            cleanup();
+          });
+
+          upstreamSocket.on('close', cleanup);
+          upstreamSocket.on('error', (err) => {
+            this.logger?.debug({ err: err.message, requestId }, 'Upstream socket error in active tunnel');
+            cleanup();
+          });
         });
 
-        clientSocket.on('close', cleanup);
-        clientSocket.on('error', (err) => {
-          this.logger?.debug({ err: err.message, requestId }, 'Client socket error in active tunnel');
-          cleanup();
-        });
-        upstreamSocket.on('close', cleanup);
-        upstreamSocket.on('error', (err) => {
-          this.logger?.debug({ err: err.message, requestId }, 'Upstream socket error in active tunnel');
-          cleanup();
-        });
-      });
+        upstreamReq.end();
+      };
 
-      upstreamReq.end();
+      attemptConnect(1);
     });
   }
 

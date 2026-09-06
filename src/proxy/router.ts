@@ -87,7 +87,7 @@ export class ProxyRouter {
       }
     }
 
-    const firstUpstream = (route as any).upstreams && (route as any).upstreams.length > 0 ? ((route as any).upstreams[0] ?? '') : '';
+    const firstUpstream = route.upstreams && route.upstreams.length > 0 ? (route.upstreams[0] ?? '') : '';
     const effectiveUpstream: string = upstreamOverride ?? route.upstream ?? firstUpstream;
 
     const upstreamBase = effectiveUpstream.endsWith('/')
