@@ -126,19 +126,19 @@ export const RouteTimeoutPolicySchema = z.object({
 });
 
 export const RouteDefinitionSchema = z.object({
-  id: z
-    .string()
-    .min(1)
-    .max(128)
-    .regex(/^[a-zA-Z0-9_-]+$/, 'Route id must contain only alphanumeric characters, dashes, and underscores'),
-  pathPrefix: z
-    .string()
-    .min(1)
-    .startsWith('/', 'pathPrefix must start with a leading slash')
-    .refine(
-      (val) => val === '/' || !val.endsWith('/'),
-      'pathPrefix must not have a trailing slash unless it is exactly "/"'
-    ),
+    id: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(/^[a-zA-Z0-9_-]+$/, 'Route id must contain only alphanumeric characters, dashes, and underscores'),
+    pathPrefix: z
+      .string()
+      .min(1)
+      .startsWith('/', 'pathPrefix must start with a leading slash')
+      .refine(
+        (val) => val === '/' || !val.endsWith('/'),
+        'pathPrefix must not have a trailing slash unless it is exactly "/"'
+      ),
   upstream: z
     .string()
     .url('upstream must be a valid URL')
@@ -146,25 +146,26 @@ export const RouteDefinitionSchema = z.object({
       (val) => val.startsWith('http://') || val.startsWith('https://'),
       'upstream protocol must be http:// or https://'
     ),
-  stripPrefix: z.boolean().default(false),
-  methods: z.array(HttpMethodSchema).min(1, 'methods array must not be empty').default([
-    'GET',
-    'POST',
-    'PUT',
-    'PATCH',
-    'DELETE',
-    'HEAD',
-    'OPTIONS',
-  ]),
-  auth: RouteAuthPolicySchema.default({ mode: 'public' }),
-  rateLimit: RouteRateLimitPolicySchema.optional(),
-  cache: RouteCachePolicySchema.optional(),
-  circuitBreaker: RouteCircuitBreakerPolicySchema.optional(),
-  timeouts: RouteTimeoutPolicySchema.default({
-    connectTimeoutMs: 1000,
-    responseTimeoutMs: 3000,
-  }),
-});
+    stripPrefix: z.boolean().default(false),
+    websocket: z.boolean().optional(),
+    methods: z.array(HttpMethodSchema).min(1, 'methods array must not be empty').default([
+      'GET',
+      'POST',
+      'PUT',
+      'PATCH',
+      'DELETE',
+      'HEAD',
+      'OPTIONS',
+    ]),
+    auth: RouteAuthPolicySchema.default({ mode: 'public' }),
+    rateLimit: RouteRateLimitPolicySchema.optional(),
+    cache: RouteCachePolicySchema.optional(),
+    circuitBreaker: RouteCircuitBreakerPolicySchema.optional(),
+    timeouts: RouteTimeoutPolicySchema.default({
+      connectTimeoutMs: 1000,
+      responseTimeoutMs: 3000,
+    }),
+  });
 
 export const RoutesListSchema = z
   .array(RouteDefinitionSchema)

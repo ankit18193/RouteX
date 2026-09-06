@@ -3,3 +3,4 @@ export * from './router.js';
 export * from './pool.js';
 export * from './headers.js';
 export * from './stream-handler.js';
+export * from './websocket.js';

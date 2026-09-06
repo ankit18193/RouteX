@@ -189,3 +189,99 @@ export function sanitizeResponseHeaders(
 
   return sanitized;
 }
+
+
+export interface WebSocketHeaderSanitizeOptions {
+  readonly clientIp: string;
+  readonly requestId: string;
+  readonly targetHost: string;
+  readonly originalHost?: string | undefined;
+  readonly proto?: string | undefined;
+  readonly authContext?: AuthContext | undefined;
+}
+
+const WS_HOP_BY_HOP_STRIP = new Set([
+  'keep-alive',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'http2-settings',
+  'proxy-connection',
+]);
+
+/**
+ * Sanitize and prepare headers for RFC 6455 WebSocket Upgrade request to upstream.
+ * Preserves Connection: Upgrade, Upgrade: websocket, Sec-WebSocket-*, and authorization headers
+ * while stripping untrusted identity headers and sanitizing client IP.
+ */
+export function sanitizeWebSocketUpgradeHeaders(
+  headers: IncomingHttpHeaders | Record<string, string | string[] | undefined>,
+  options: WebSocketHeaderSanitizeOptions
+): Record<string, string | string[]> {
+  const sanitized: Record<string, string | string[]> = {};
+
+  for (const [rawKey, rawValue] of Object.entries(headers)) {
+    if (rawValue === undefined) {
+      continue;
+    }
+
+    const key = rawKey.toLowerCase().trim();
+
+    // Strip hop-by-hop headers except connection and upgrade
+    if (WS_HOP_BY_HOP_STRIP.has(key)) {
+      continue;
+    }
+
+    // Strip untrusted identity & internal gateway headers sent by client
+    if (
+      UNTRUSTED_INCOMING_HEADERS.has(key) ||
+      key.startsWith('x-gateway-') ||
+      key.startsWith('x-internal-')
+    ) {
+      continue;
+    }
+
+    // Strip CRLF characters to prevent header injection
+    if (typeof rawValue === 'string') {
+      sanitized[key] = sanitizeHeaderValue(rawValue);
+    } else if (Array.isArray(rawValue)) {
+      sanitized[key] = rawValue.map((v) => sanitizeHeaderValue(v));
+    }
+  }
+
+  // Ensure RFC 6455 upgrade headers are explicitly set
+  sanitized['connection'] = 'Upgrade';
+  sanitized['upgrade'] = 'websocket';
+
+  // Overwrite host header to target upstream host
+  sanitized['host'] = options.targetHost;
+
+  // Correlation & gateway identification
+  sanitized['x-request-id'] = options.requestId;
+  sanitized['x-gateway-forwarded-by'] = 'routex';
+
+  // Forwarded metadata (stripping client XFF and using verified clientIp)
+  sanitized['x-forwarded-for'] = options.clientIp;
+  sanitized['x-forwarded-proto'] = options.proto ?? 'http';
+
+  if (options.originalHost) {
+    sanitized['x-forwarded-host'] = sanitizeHeaderValue(options.originalHost);
+  }
+
+  // Inject verified identity headers if authContext provided
+  if (options.authContext) {
+    if (options.authContext.authenticated && options.authContext.userId) {
+      sanitized['x-user-id'] = sanitizeHeaderValue(options.authContext.userId);
+      sanitized['x-user-roles'] = sanitizeHeaderValue(options.authContext.roles.join(','));
+      sanitized['x-auth-type'] = options.authContext.authType;
+      sanitized['x-gateway-auth-status'] = 'authenticated';
+    } else {
+      sanitized['x-auth-type'] = 'anonymous';
+      sanitized['x-gateway-auth-status'] = 'anonymous';
+    }
+  }
+
+  return sanitized;
+}

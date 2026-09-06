@@ -3,6 +3,7 @@ import type { GatewayConfig, GatewayConfigInput } from '../types/index.js';
 import { GatewayConfigSchema } from '../config/schema.js';
 import { ProxyRouter } from '../proxy/router.js';
 import { UpstreamPoolManager } from '../proxy/pool.js';
+import { WebSocketProxyHandler } from '../proxy/websocket.js';
 import { handleProxyStream } from '../proxy/stream-handler.js';
 import { createLogger, logAccess } from '../logger/logger.js';
 import { normalizeRequestId } from '../utils/uuid.js';
@@ -44,6 +45,7 @@ export class RouteXGatewayServer {
   public readonly rateLimitManager: RateLimitManager;
   public readonly cacheManager: CacheManager;
   public readonly circuitManager: CircuitManager;
+  public readonly webSocketHandler: WebSocketProxyHandler;
   private isRunning = false;
   private isShuttingDown = false;
 
@@ -80,6 +82,14 @@ export class RouteXGatewayServer {
     this.cacheManager = new CacheManager(this.rateLimitManager.client, {
       keyPrefix: this.config.redis.keyPrefix,
     });
+    this.webSocketHandler = new WebSocketProxyHandler({
+      router: this.router,
+      rateLimitManager: this.rateLimitManager,
+      authManager: this.authManager,
+      logger,
+      defaultUpgradeTimeoutMs: 5000,
+    });
+
     this.circuitManager = new CircuitManager({
       onStateChange: (event) => {
         logger.warn(
@@ -100,6 +110,17 @@ export class RouteXGatewayServer {
   }
 
   private setupMiddleware(): void {
+    // 0. HTTP Upgrade listener for RFC 6455 WebSocket proxying
+    this.app.server.on('upgrade', (req, socket, head) => {
+      if (this.isShuttingDown) {
+        socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');
+        return;
+      }
+      this.webSocketHandler.handleUpgrade(req, socket, head).catch((_err) => {
+        if (!socket.destroyed) socket.destroy();
+      });
+    });
+
     // 1. Zero-buffer stream payload content-type parsers
     this.app.addContentTypeParser('application/octet-stream', (_req, payload, done) => {
       done(null, payload);
@@ -605,6 +626,7 @@ export class RouteXGatewayServer {
       (rawServer as any).closeIdleConnections();
     }
 
+    await this.webSocketHandler.closeAll(5000);
     await this.app.close();
     await this.rateLimitManager.close();
     await this.poolManager.close();
@@ -642,6 +664,11 @@ export class RouteXGatewayServer {
   /**
    * Get underlying CircuitManager instance.
    */
+
+  public get webSockets(): WebSocketProxyHandler {
+    return this.webSocketHandler;
+  }
+
   public get circuitBreakers(): CircuitManager {
     return this.circuitManager;
   }

@@ -67,6 +67,42 @@ export class ProxyRouter {
     };
   }
 
+  /**
+   * Build target upstream URL for a route given a pathname and query string,
+   * optionally overriding the upstream base URL (e.g. for health-aware round-robin selection).
+   */
+  public buildTargetUrl(
+    route: RouteDefinition,
+    pathname: string,
+    search = '',
+    upstreamOverride?: string
+  ): string {
+    let remainingPath = pathname;
+
+    if (route.stripPrefix) {
+      if (route.pathPrefix === '/') {
+        remainingPath = pathname;
+      } else {
+        remainingPath = pathname.slice(route.pathPrefix.length);
+      }
+    }
+
+    const firstUpstream = (route as any).upstreams && (route as any).upstreams.length > 0 ? ((route as any).upstreams[0] ?? '') : '';
+    const effectiveUpstream: string = upstreamOverride ?? route.upstream ?? firstUpstream;
+
+    const upstreamBase = effectiveUpstream.endsWith('/')
+      ? effectiveUpstream.slice(0, -1)
+      : effectiveUpstream;
+
+    let pathPart = '';
+    if (remainingPath !== '' && remainingPath !== '/') {
+      pathPart = remainingPath.startsWith('/') ? remainingPath : `/${remainingPath}`;
+    }
+
+    const cleanSearch = search.startsWith('?') || search === '' ? search : `?${search}`;
+    return `${upstreamBase}${pathPart}${cleanSearch}`;
+  }
+
   private isPrefixMatch(pathname: string, prefix: string): boolean {
     if (prefix === '/') {
       return true;
@@ -98,18 +134,7 @@ export class ProxyRouter {
       }
     }
 
-    // Build target upstream URL
-    const upstreamBase = route.upstream.endsWith('/')
-      ? route.upstream.slice(0, -1)
-      : route.upstream;
-
-    let pathPart = '';
-    if (remainingPath !== '' && remainingPath !== '/') {
-      pathPart = remainingPath.startsWith('/') ? remainingPath : `/${remainingPath}`;
-    }
-
-    const cleanSearch = search.startsWith('?') || search === '' ? search : `?${search}`;
-    const targetUrl = `${upstreamBase}${pathPart}${cleanSearch}`;
+    const targetUrl = this.buildTargetUrl(route, pathname, search);
 
     return {
       matched: true,
