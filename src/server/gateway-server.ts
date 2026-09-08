@@ -1,3 +1,6 @@
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { Duplex } from 'node:stream';
+import type { RouteMatchResult } from '../proxy/types.js';
 import fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import type { GatewayConfig, GatewayConfigInput } from '../types/index.js';
 import { GatewayConfigSchema } from '../config/schema.js';
@@ -35,6 +38,12 @@ declare module 'fastify' {
 export interface GatewayServerOptions {
   readonly logger?: boolean | undefined;
   readonly redisClient?: RedisClient | undefined;
+  /**
+   * When true, disables internal server listener setup and prepares RouteX for embedded use.
+   * In embedded mode, RouteX does not call listen() and delegates request/upgrade handling.
+   * Defaults to false.
+   */
+  readonly embedded?: boolean | undefined;
 }
 
 export class RouteXGatewayServer {
@@ -48,6 +57,7 @@ export class RouteXGatewayServer {
   public readonly circuitManager: CircuitManager;
   public readonly healthTracker: UpstreamHealthTracker;
   public readonly webSocketHandler: WebSocketProxyHandler;
+  public readonly isEmbedded: boolean;
   private isRunning = false;
   private isShuttingDown = false;
 
@@ -56,6 +66,7 @@ export class RouteXGatewayServer {
     options: GatewayServerOptions = {}
   ) {
     this.config = GatewayConfigSchema.parse(config);
+    this.isEmbedded = options.embedded === true;
 
     const logger = createLogger({
       level: this.config.server.logLevel,
@@ -123,15 +134,17 @@ export class RouteXGatewayServer {
 
   private setupMiddleware(): void {
     // 0. HTTP Upgrade listener for RFC 6455 WebSocket proxying
-    this.app.server.on('upgrade', (req, socket, head) => {
-      if (this.isShuttingDown) {
-        socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');
-        return;
-      }
-      this.webSocketHandler.handleUpgrade(req, socket, head).catch((_err) => {
-        if (!socket.destroyed) socket.destroy();
+    if (!this.isEmbedded) {
+      this.app.server.on('upgrade', (req, socket, head) => {
+        if (this.isShuttingDown) {
+          socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');
+          return;
+        }
+        this.webSocketHandler.handleUpgrade(req, socket, head).catch((_err) => {
+          if (!socket.destroyed) socket.destroy();
+        });
       });
-    });
+    }
 
     // 1. Zero-buffer stream payload content-type parsers
     this.app.addContentTypeParser('application/octet-stream', (_req, payload, done) => {
@@ -602,6 +615,9 @@ export class RouteXGatewayServer {
    * Start gateway server and listen on configured host and port.
    */
   public async listen(overridePort?: number, overrideHost?: string): Promise<string> {
+    if (this.isEmbedded) {
+      throw new Error('RouteXGatewayServer.listen() cannot be called when embedded mode is enabled.');
+    }
     const port = overridePort ?? this.config.server.port;
     const host = overrideHost ?? this.config.server.host;
 
@@ -617,6 +633,7 @@ export class RouteXGatewayServer {
   public async ready(): Promise<void> {
     await this.rateLimitManager.init();
     await this.app.ready();
+    this.isRunning = true;
   }
 
   /**
@@ -624,7 +641,7 @@ export class RouteXGatewayServer {
    */
   public async close(): Promise<void> {
     this.isShuttingDown = true;
-    if (!this.isRunning && !this.app.server.listening) {
+    if (!this.isRunning && !this.app.server.listening && !this.isEmbedded) {
       await this.rateLimitManager.close();
       await this.poolManager.close();
       this.circuitManager.resetAll();
@@ -633,9 +650,11 @@ export class RouteXGatewayServer {
     this.isRunning = false;
 
     // Close idle keep-alive connections so server closes gracefully without waiting for keep-alive timeout
-    const rawServer = this.app.server;
-    if (rawServer && typeof (rawServer as any).closeIdleConnections === 'function') {
-      (rawServer as any).closeIdleConnections();
+    if (!this.isEmbedded) {
+      const rawServer = this.app.server;
+      if (rawServer && typeof (rawServer as any).closeIdleConnections === 'function') {
+        (rawServer as any).closeIdleConnections();
+      }
     }
 
     this.healthTracker.stop();
@@ -649,6 +668,75 @@ export class RouteXGatewayServer {
   /**
    * Get underlying Fastify application instance.
    */
+  /**
+   * Match an incoming request path and method against configured routes.
+   */
+  public matchRoute(urlPath: string, method: string = 'GET'): RouteMatchResult {
+    const rawUrl = urlPath || '/';
+    const cleanPath = rawUrl.split('?')[0] ?? '/';
+    const search = rawUrl.includes('?') ? rawUrl.slice(rawUrl.indexOf('?')) : '';
+    return this.router.match(cleanPath, method, search);
+  }
+
+  /**
+   * Dispatch an incoming HTTP request through RouteX's Fastify routing and proxy pipeline.
+   * Returns true if RouteX consumed the request, or false if not matched.
+   */
+  public async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+    const rawUrl = req.url ?? '/';
+    const urlPath = rawUrl.split('?')[0] ?? '/';
+    const search = rawUrl.includes('?') ? rawUrl.slice(rawUrl.indexOf('?')) : '';
+    const method = req.method ?? 'GET';
+
+    // 1. Check RouteX router match for configured proxy routes
+    const routeMatch = this.router.match(urlPath, method, search);
+
+    // 2. Explicit gateway probe check (only dedicated /gateway/healthz, never host /healthz or /readyz)
+    const isGatewayProbe = method === 'GET' && urlPath === '/gateway/healthz';
+
+    if (!routeMatch.matched && !isGatewayProbe) {
+      return false; // RouteX does not consume this request; host application handles it natively
+    }
+
+    if (this.isShuttingDown) {
+      const body = JSON.stringify({ error: 'Service Unavailable', message: 'Gateway is shutting down' });
+      res.writeHead(503, {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body),
+        'Connection': 'close',
+      });
+      res.end(body);
+      return true;
+    }
+
+    // Dispatch into Fastify's compiled routing pipeline
+    this.app.routing(req, res);
+    return true;
+  }
+
+  /**
+   * Dispatch an incoming RFC 6455 HTTP upgrade request through RouteX's WebSocket proxy handler.
+   * Returns true if RouteX consumed the upgrade, or false if not matched.
+   */
+  public async handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<boolean> {
+    const rawUrl = req.url ?? '/';
+    const urlPath = rawUrl.split('?')[0] ?? '/';
+    const search = rawUrl.includes('?') ? rawUrl.slice(rawUrl.indexOf('?')) : '';
+    const matchResult = this.router.match(urlPath, 'GET', search);
+
+    if (!matchResult.matched || !matchResult.route.websocket) {
+      return false; // RouteX does not consume this upgrade; host application handles it natively
+    }
+
+    if (this.isShuttingDown) {
+      socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');
+      return true;
+    }
+
+    await this.webSocketHandler.handleUpgrade(req, socket, head);
+    return true;
+  }
+
   public get fastifyInstance(): FastifyInstance {
     return this.app;
   }

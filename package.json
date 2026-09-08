@@ -1,5 +1,5 @@
 {
-  "name": "routex",
+  "name":  "@ankit18193/routex-gateway",
   "version": "1.1.0",
   "description": "Production-grade API Gateway and Reverse Proxy built with Node.js and TypeScript",
   "type": "module",

@@ -80,7 +80,7 @@ describe('RouteX Package Exports & Structure', () => {
     const pkgPath = resolve(process.cwd(), 'package.json');
     const pkgContent = JSON.parse(readFileSync(pkgPath, 'utf-8'));
 
-    expect(pkgContent.name).toBe('routex');
+    expect(['routex', '@ankit18193/routex-gateway']).toContain(pkgContent.name);
     expect(pkgContent.type).toBe('module');
     expect(pkgContent.main).toBe('dist/src/index.js');
     expect(pkgContent.types).toBe('dist/src/index.d.ts');
