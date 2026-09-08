@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.2.0] — 2026-09-08
+
+### Embedded Server API for Host Applications
+
+#### Added
+- **Embedded Gateway Server Lifecycle**:
+  - Added `options.embedded` to `GatewayServerOptions` to enable embedding RouteX inside externally owned HTTP servers (e.g., Pulse, Express, raw `http.Server`).
+  - Added `isEmbedded: boolean` property to `RouteXGatewayServer` reflecting runtime execution mode.
+  - Guarded `listen()` to throw an explicit error when invoked in embedded mode, preventing accidental port binding collisions.
+  - Updated `ready()` to initialize Fastify plugins and Redis rate limiting without listening on network sockets.
+  - Decoupled `close()` to drain active WebSocket tunnels (`webSocketHandler.closeAll(5000)`), connection pools, and Redis without calling `server.close()` or terminating the host application's listening socket.
+  - Hardened `close()` to be fully idempotent across multiple calls.
+- **Request & Upgrade Dispatchers**:
+  - Added `matchRoute(urlPath, method): RouteMatchResult` for route introspection before dispatch.
+  - Added `handleRequest(req, res): Promise<boolean>` returning `true` if RouteX consumed the request, or `false` if unmatched for clean fall-through to host handlers. Correctly returns RFC 405 `Method Not Allowed` with `Allow` headers on matched paths with disallowed verbs.
+  - Added `handleUpgrade(req, socket, head): Promise<boolean>` returning `true` if RouteX handled the WebSocket upgrade, or `false` for zero-mutation fall-through to the host.
+  - Added defensive initialization guards throwing explicit errors if dispatchers are called before `ready()`.
+- **Automated Verification & Regression Tests**:
+  - Added `tests/unit/embedded-gateway.test.ts` covering embedded lifecycle, route matching, and error guards.
+  - Added `tests/integration/embedded-server.test.ts` verifying end-to-end HTTP/WS proxying, fallback routing, and graceful socket shutdown.
+
+---
+
 ## [1.1.0] — 2026-09-08
 
 ### Reusable npm Package Conversion & Programmatic SDK
