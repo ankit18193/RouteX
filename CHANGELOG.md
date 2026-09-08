@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.0] — 2026-09-08
+
+### Reusable npm Package Conversion & Programmatic SDK
+
+#### Added
+- **Reusable npm Package Manifest**:
+  - Configured conditional ESM `exports` mapping covering root (`routex`) and 11 subpaths (`routex/config`, `routex/server`, `routex/types`, `routex/errors`, `routex/auth`, `routex/rate-limit`, `routex/cache`, `routex/circuit-breaker`, `routex/proxy`, `routex/logger`, `routex/utils`).
+  - Added TypeScript type declarations (`"types": "dist/src/index.d.ts"`).
+  - Added `"files"` whitelist (`["dist/src", "README.md", "LICENSE"]`), reducing tarball footprint from 42.3MB down to 108kB.
+  - Added `"prepack": "npm run build"` to guarantee fresh type definitions before publishing.
+  - Added MIT `LICENSE` file.
+- **Programmatic Library Mode**:
+  - Supported purely in-memory instantiation with `createGatewayServer({ routes: [...] })` without YAML configuration files.
+  - Added comprehensive unit tests in `tests/unit/package-exports.test.ts`.
+  - Added integration tests in `tests/integration/library-mode.test.ts` verifying request proxying, Fastify instance extension, and socket draining.
+- **Standalone Mode Preservation**:
+  - Added `"dev": "tsc && node dist/src/bin/gateway.js"` script for rapid development.
+  - Preserved standalone gateway CLI (`routex`), Dockerfile, and docker-compose deployment.
+
+---
+
 ## [1.0.0] — 2026-08-30
 
 ### General Availability Release — RouteX Edge API Gateway & Reverse Proxy
