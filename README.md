@@ -8,7 +8,7 @@
 1. [Architecture Overview](#architecture-overview)
 2. [Integrating RouteX Into Your Application](#integrating-routex-into-your-application)
    - [The Integration Mental Model](#the-integration-mental-model)
-   - [The Two Integration Models](#the-two-integration-models)
+   - [The Three Integration Models](#the-three-integration-models)
    - [Zero-to-Working Integration Guide (10 Steps)](#zero-to-working-integration-guide-10-steps)
    - [Real Worked Example Application](#real-worked-example-application)
    - [What the Developer Modifies vs What Stays Untouched](#what-the-developer-modifies-vs-what-stays-untouched)
@@ -101,11 +101,11 @@ Client / Frontend ───> RouteX Gateway (:8080)
 
 ---
 
-### The Two Integration Models
+### The Three Integration Models
 
 Depending on your organization's repository structure, choose the model that fits your architecture:
 
-#### Option A: Dedicated Gateway Service (Recommended)
+#### Option A: Dedicated Gateway Service (Recommended for Microservices)
 
 RouteX runs as an independent repository and containerized service in your infrastructure, sitting in front of your application services:
 
@@ -126,6 +126,67 @@ RouteX/ (Separate repo / container)
 #### Option B: Monorepo / Unified Deployment
 
 If your team maintains a monorepo, RouteX lives in an `api-gateway/` or `routex/` directory and is orchestrated alongside your services in a shared `docker-compose.yml` or Kubernetes manifest.
+
+#### Option C: Reusable npm Package / Programmatic Library
+
+Install and import RouteX directly into any Node.js / TypeScript application:
+
+```bash
+npm install routex
+```
+
+```typescript
+import { createGatewayServer } from 'routex';
+
+// Initialize RouteX Gateway programmatically in code
+const gateway = createGatewayServer({
+  server: {
+    port: 8080,
+    host: '0.0.0.0',
+    logLevel: 'info',
+  },
+  routes: [
+    {
+      id: 'user-service-route',
+      pathPrefix: '/api/v1/users',
+      upstream: 'http://localhost:4001',
+      methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    },
+    {
+      id: 'chat-service-route',
+      pathPrefix: '/api/v1/chats',
+      upstream: 'http://localhost:4002',
+      websocket: true,
+    },
+  ],
+});
+
+// Start listening
+const address = await gateway.listen();
+console.log(`RouteX Gateway running on ${address}`);
+
+// Access underlying Fastify instance if needed:
+// gateway.fastifyInstance.get('/custom', ...)
+
+// Gracefully drain sockets and close connection pools on shutdown:
+// await gateway.close();
+```
+
+##### Modular Subpath Imports
+
+RouteX exports clean, tree-shakeable ESM submodules:
+
+```typescript
+import { RouteXGatewayServer, createGatewayServer } from 'routex/server';
+import { GatewayConfigSchema, loadGatewayConfig } from 'routex/config';
+import { GatewayError, createErrorEnvelope } from 'routex/errors';
+import { AuthManager, createAuthManager } from 'routex/auth';
+import { RateLimitManager, RedisClient } from 'routex/rate-limit';
+import { CacheManager } from 'routex/cache';
+import { CircuitManager } from 'routex/circuit-breaker';
+import { ProxyRouter, WebSocketProxyHandler } from 'routex/proxy';
+import { createLogger, logAccess } from 'routex/logger';
+```
 
 ---
 
@@ -795,6 +856,10 @@ Every request traversing RouteX undergoes a strict deterministic 10-step lifecyc
 
 3. **Start RouteX Gateway**:
    ```bash
+   # Development mode (compiles TypeScript and runs standalone gateway)
+   npm run dev
+
+   # Or production mode (runs pre-compiled dist/src/bin/gateway.js)
    npm start
    ```
    Gateway listens on `http://127.0.0.1:8080`.
@@ -996,7 +1061,7 @@ RouteX enforces zero-buffer streaming across request upload and response downloa
 To run the complete automated test suite (unit, integration, and E2E acceptance tests):
 
 ```bash
-# Run all unit, integration, and E2E tests (40 suites, 316 tests)
+# Run all unit, integration, and E2E tests (42 suites, 321 tests)
 npm test
 
 # Run tests with V8 code coverage report (>91.8% coverage)
