@@ -67,3 +67,6 @@ desktop.ini
 # Docker & Local Overrides (preserve Dockerfile and docker-compose.yml)
 docker-compose.override.yml
 .docker/
+
+# GStack
+.gstack/
