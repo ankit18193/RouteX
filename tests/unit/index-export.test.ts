@@ -60,6 +60,10 @@ describe('RouteX Root Module Exports', () => {
     expect(RouteX.CircuitBreaker).toBeDefined();
     expect(RouteX.CircuitManager).toBeDefined();
     expect(RouteX.CircuitBreakerOpenError).toBeDefined();
+
+    // Phase 8 WebSocket & health-tracker exports
+    expect(RouteX.WebSocketProxyHandler).toBeDefined();
+    expect(RouteX.UpstreamHealthTracker).toBeDefined();
   });
 
   it('should export mock service factories and JWT test helpers', () => {
