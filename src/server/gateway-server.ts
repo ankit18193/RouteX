@@ -60,6 +60,7 @@ export class RouteXGatewayServer {
   public readonly isEmbedded: boolean;
   private isRunning = false;
   private isShuttingDown = false;
+  private isClosed = false;
 
   constructor(
     config: GatewayConfig | GatewayConfigInput,
@@ -640,6 +641,10 @@ export class RouteXGatewayServer {
    * Stop gateway server and gracefully close connection pools and Redis.
    */
   public async close(): Promise<void> {
+    if (this.isClosed) {
+      return;
+    }
+    this.isClosed = true;
     this.isShuttingDown = true;
     if (!this.isRunning && !this.app.server.listening && !this.isEmbedded) {
       await this.rateLimitManager.close();
@@ -683,6 +688,10 @@ export class RouteXGatewayServer {
    * Returns true if RouteX consumed the request, or false if not matched.
    */
   public async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
+    if (!this.isRunning && !this.isShuttingDown) {
+      throw new Error('RouteXGatewayServer.ready() must be awaited before calling handleRequest().');
+    }
+
     const rawUrl = req.url ?? '/';
     const urlPath = rawUrl.split('?')[0] ?? '/';
     const search = rawUrl.includes('?') ? rawUrl.slice(rawUrl.indexOf('?')) : '';
@@ -694,7 +703,7 @@ export class RouteXGatewayServer {
     // 2. Explicit gateway probe check (only dedicated /gateway/healthz, never host /healthz or /readyz)
     const isGatewayProbe = method === 'GET' && urlPath === '/gateway/healthz';
 
-    if (!routeMatch.matched && !isGatewayProbe) {
+    if (!routeMatch.matched && routeMatch.reason !== 'METHOD_NOT_ALLOWED' && !isGatewayProbe) {
       return false; // RouteX does not consume this request; host application handles it natively
     }
 
@@ -719,6 +728,10 @@ export class RouteXGatewayServer {
    * Returns true if RouteX consumed the upgrade, or false if not matched.
    */
   public async handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<boolean> {
+    if (!this.isRunning && !this.isShuttingDown) {
+      throw new Error('RouteXGatewayServer.ready() must be awaited before calling handleUpgrade().');
+    }
+
     const rawUrl = req.url ?? '/';
     const urlPath = rawUrl.split('?')[0] ?? '/';
     const search = rawUrl.includes('?') ? rawUrl.slice(rawUrl.indexOf('?')) : '';
@@ -733,7 +746,11 @@ export class RouteXGatewayServer {
       return true;
     }
 
-    await this.webSocketHandler.handleUpgrade(req, socket, head);
+    try {
+      await this.webSocketHandler.handleUpgrade(req, socket, head);
+    } catch (_err) {
+      if (!socket.destroyed) socket.destroy();
+    }
     return true;
   }
 

@@ -82,6 +82,20 @@ describe('RouteX Embedded Gateway — Unit Tests', () => {
     expect(unmatch.matched).toBe(false);
   });
 
+  it('should throw if handleRequest() or handleUpgrade() is called before ready()', async () => {
+    gateway = createGatewayServer(testConfig, { embedded: true });
+    const mockReq = { url: '/api/test', method: 'GET' } as any;
+    const mockRes = {} as any;
+    const mockSocket = { destroyed: false, destroy: () => {} } as any;
+
+    await expect(gateway.handleRequest(mockReq, mockRes)).rejects.toThrow(
+      'RouteXGatewayServer.ready() must be awaited before calling handleRequest().'
+    );
+    await expect(gateway.handleUpgrade(mockReq, mockSocket, Buffer.alloc(0))).rejects.toThrow(
+      'RouteXGatewayServer.ready() must be awaited before calling handleUpgrade().'
+    );
+  });
+
   it('should close gracefully in embedded mode without throwing', async () => {
     gateway = createGatewayServer(testConfig, { embedded: true });
     await gateway.ready();

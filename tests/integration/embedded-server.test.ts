@@ -236,6 +236,26 @@ describe('RouteX Embedded Mode ↔ Host HTTP Server Integration', () => {
     socket.destroy();
   });
 
+  it('7. should return 405 Method Not Allowed with Allow header when HTTP method is not permitted on matched route', async () => {
+    // Route /api only permits GET and POST. Sending DELETE should return 405 from RouteX, not 404 from host.
+    const res = await fetch(`http://127.0.0.1:${hostPort}/api/users`, { method: 'DELETE' });
+    expect(res.status).toBe(405);
+    const allowHeader = res.headers.get('allow');
+    expect(allowHeader).toBeDefined();
+    expect(allowHeader).toContain('GET');
+    expect(allowHeader).toContain('POST');
+
+    const body = (await res.json()) as any;
+    expect(body.statusCode).toBe(405);
+    expect(body.error).toBe('BAD_REQUEST');
+    expect(body.message).toContain('DELETE');
+  });
+
+  it('8. should be idempotent when close() is called multiple times', async () => {
+    await expect(gateway.close()).resolves.toBeUndefined();
+    await expect(gateway.close()).resolves.toBeUndefined();
+  });
+
   it('6. should close RouteX without terminating the host HTTP server', async () => {
     await gateway.close();
 
