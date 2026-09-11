@@ -6,7 +6,10 @@
 
 ## Table of Contents
 1. [Architecture Overview](#architecture-overview)
-2. [Integrating RouteX Into Your Application](#integrating-routex-into-your-application)
+2. [Developer Prompts](#developer-prompts)
+   - [Prompt 1 — Understand RouteX](#prompt-1--understand-routex)
+   - [Prompt 2 — Integrate RouteX Into My Existing Project](#prompt-2--integrate-routex-into-my-existing-project)
+3. [Integrating RouteX Into Your Application](#integrating-routex-into-your-application)
    - [The Integration Mental Model](#the-integration-mental-model)
    - [The Three Integration Models](#the-three-integration-models)
    - [Zero-to-Working Integration Guide (10 Steps)](#zero-to-working-integration-guide-10-steps)
@@ -22,21 +25,21 @@
    - [Practical Guide: Rate Limiting, Caching & Circuit Breaking](#practical-guide-rate-limiting-caching--circuit-breaking)
    - [RouteX Integration Checklist](#routex-integration-checklist)
    - [What You Don't Need to Change](#what-you-dont-need-to-change)
-3. [Feature Matrix](#feature-matrix)
-4. [Request Lifecycle Pipeline](#request-lifecycle-pipeline)
-5. [Quickstart Guide](#quickstart-guide)
+4. [Feature Matrix](#feature-matrix)
+5. [Request Lifecycle Pipeline](#request-lifecycle-pipeline)
+6. [Quickstart Guide](#quickstart-guide)
    - [Local Development](#local-development)
    - [Docker & Docker Compose](#docker--docker-compose)
-6. [Configuration Reference](#configuration-reference)
-7. [Operational Runbook](#operational-runbook)
+7. [Configuration Reference](#configuration-reference)
+8. [Operational Runbook](#operational-runbook)
    - [Health & Readiness Probes](#health--readiness-probes)
    - [Graceful Shutdown & Socket Draining](#graceful-shutdown--socket-draining)
    - [Structured Logging & Correlation](#structured-logging--correlation)
    - [Redis Fault Tolerance & Fail-Open Behavior](#redis-fault-tolerance--fail-open-behavior)
-8. [Security Model](#security-model)
-9. [Performance & Streaming Memory Profiling](#performance--streaming-memory-profiling)
-10. [Troubleshooting Guide](#troubleshooting-guide)
-11. [Automated Verification Suite](#automated-verification-suite)
+9. [Security Model](#security-model)
+10. [Performance & Streaming Memory Profiling](#performance--streaming-memory-profiling)
+11. [Troubleshooting Guide](#troubleshooting-guide)
+12. [Automated Verification Suite](#automated-verification-suite)
 
 ---
 
@@ -69,6 +72,676 @@ flowchart TD
     P2 -.->|Sliding Window Lua| Redis[(Redis 7 :6379)]
     P5 -.->|Sliding Window Lua| Redis
     P6 -.->|SHA-256 Key Cache| Redis
+```
+
+---
+
+## Developer Prompts
+
+The two prompts below are designed to be given directly to an AI coding agent.
+
+**Prompt 1** makes the agent explain RouteX from first principles so you deeply understand what it does and why.
+
+**Prompt 2** makes the agent inspect your existing project and perform the complete RouteX integration end-to-end — routes, Docker networking, environment variables, auth, Redis, frontend URLs, and verification.
+
+---
+
+## Prompt 1 — Understand RouteX
+
+Give this prompt to an AI coding agent from **inside the RouteX repository**. The agent will inspect the actual source code and configuration files and build a complete mental model of RouteX that you can use for deep understanding and interview preparation.
+
+```
+You are a senior platform engineer and technical educator.
+
+Your task is to produce a thorough, accurate mental model of the RouteX API Gateway project
+by reading its actual source code, configuration files, and Docker setup.
+
+Do not merely summarize file names or list features. Build and explain the mental model.
+Use actual code, configuration, and schema definitions as your evidence.
+Explicitly say when something cannot be confirmed from the repository.
+
+---
+
+INSPECT THE FOLLOWING FILES BEFORE EXPLAINING ANYTHING:
+
+- src/config/schema.ts                    (Zod schema — all valid configuration fields)
+- src/config/loader.ts                    (how config is loaded, env var precedence)
+- src/server/gateway-server.ts            (Fastify server, full request pipeline)
+- src/proxy/router.ts                     (route matching algorithm)
+- src/proxy/pool.ts                       (Undici connection pool)
+- src/proxy/stream-handler.ts             (streaming proxy)
+- src/proxy/headers.ts                    (header sanitization, identity injection)
+- src/proxy/websocket.ts                  (WebSocket proxy)
+- src/proxy/upstream-health.ts            (upstream health tracking)
+- src/auth/auth-manager.ts                (auth orchestration)
+- src/auth/jwt-verifier.ts                (JWT verification logic)
+- src/auth/api-key-authenticator.ts       (API key verification)
+- src/auth/extractor.ts                   (credential extraction from headers)
+- src/rate-limit/rate-limit-manager.ts    (two-tier rate limiting)
+- src/cache/cache-manager.ts              (response caching, SingleFlight)
+- src/circuit-breaker/circuit-manager.ts  (circuit breaker state machine)
+- src/bin/gateway.ts                      (CLI entrypoint, graceful shutdown)
+- config/gateway.docker.yaml              (actual gateway configuration)
+- config/routes.docker.yaml               (actual route configuration)
+- config/gateway.config.yaml              (local dev configuration)
+- config/routes.yaml                      (local dev routes)
+- docker-compose.yml                      (container topology)
+- Dockerfile                              (multi-stage production build)
+- .env.example                            (environment variables)
+- package.json                            (npm scripts, dependencies, exports)
+
+---
+
+EXPLAIN THE FOLLOWING IN THIS EXACT ORDER:
+
+1. ROUTEX IN ONE PICTURE
+   Draw an ASCII diagram showing: Client -> RouteX -> Backend Services.
+   Show Redis connected to RouteX.
+   Explain what RouteX is in two sentences.
+   Explain why an API Gateway exists — what problem it solves without one.
+
+2. ONE HTTP REQUEST FROM CLIENT TO BACKEND
+   Trace a single GET /api/v1/users/me request with Authorization: Bearer <JWT>
+   through every stage from the moment it hits RouteX's socket to the moment
+   the backend response reaches the client.
+   Name every stage. Use actual code references.
+
+3. EVERY STAGE OF THE REQUEST LIFECYCLE
+   For each of the following stages, explain:
+   - What happens
+   - Why it happens at this point in the pipeline
+   - What code/file implements it
+   - What the failure mode is (what error/status code is returned)
+
+   Stages:
+   a. Correlation ID assignment (x-request-id, hrtime.bigint)
+   b. Route resolution (longest-prefix matching, 404, 405)
+   c. Tier-1 IP rate limiting (Redis Lua sliding window, 429, fail-open/fail-closed)
+   d. Edge authentication (JWT HS256/RS256 verification, API key, mode: public/jwt/api-key/any, 401)
+   e. RBAC authorization (requiredRoles, 403)
+   f. Tier-2 identity rate limiting (per-user/API-key, tier overrides: free/premium, 429)
+   g. Response cache lookup (SHA-256 cache key, query parameter sorting, GET-only, x-cache: HIT/MISS/BYPASS)
+   h. Circuit breaker check (CLOSED/OPEN/HALF_OPEN, 503 UPSTREAM_CIRCUIT_OPEN)
+   i. SingleFlight stampede protection (concurrent cache-miss coalescing)
+   j. Header sanitization (hop-by-hop stripping RFC 7230/9110, CRLF neutralization, identity header stripping)
+   k. Identity header injection (x-user-id, x-user-roles, x-auth-type, x-gateway-auth-status)
+   l. Undici stream dispatch (connection pool, keep-alive, zero-buffer pipe)
+   m. Circuit breaker feedback (onSuccess/onFailure by status code)
+   n. Cache store (async, 200 OK only, maxBodyBytes)
+   o. Access log emission (totalDurationMs, upstreamLatencyMs, gatewayOverheadMs)
+
+4. WHAT EACH MAJOR COMPONENT DOES
+   Explain: RouteXGatewayServer, ProxyRouter, UpstreamPoolManager,
+   WebSocketProxyHandler, UpstreamHealthTracker, AuthManager, JwtVerifier,
+   ApiKeyAuthenticator, RateLimitManager, CacheManager, CircuitManager,
+   loadGatewayConfig.
+   For each: what it is, what it owns, what calls it, what it calls.
+
+5. WHY EACH COMPONENT EXISTS
+   For each component, explain the specific problem it solves.
+   Why Redis instead of in-memory? Why Undici instead of Node.js http?
+   Why Fastify instead of Express? Why Zod for config?
+   Why SingleFlight? Why per-origin circuit breakers?
+
+6. FAILURE SCENARIOS
+   For each failure, explain exactly what happens:
+   a. Redis is unreachable (fail-open vs fail-closed behavior)
+   b. Upstream service is down (502 BAD_GATEWAY, circuit breaker progression)
+   c. Upstream is slow (504 GATEWAY_TIMEOUT, responseTimeoutMs)
+   d. JWT is expired or tampered (401 UNAUTHORIZED)
+   e. Client exceeds rate limit (429, Retry-After header)
+   f. Circuit is OPEN (503 UPSTREAM_CIRCUIT_OPEN, fast-fail, no upstream call)
+   g. Client disconnects mid-stream (backpressure, socket cleanup)
+   h. SIGTERM received (graceful shutdown sequence, /readyz -> 503)
+   i. Invalid YAML configuration (Zod validation error, process exit)
+
+7. HOW REDIS PARTICIPATES
+   Explain every Redis operation RouteX performs:
+   - Sliding window Lua script for Tier-1 IP limiting
+   - Sliding window Lua script for Tier-2 identity limiting
+   - EVALSHA / NOSCRIPT fallback pattern
+   - Response cache GET/SET with TTL
+   - Cache key hashing (SHA-256, query parameter sorting)
+   - Redis key prefix (routex:)
+   - Redis fail-open vs fail-closed
+   - Bounded exponential reconnect backoff
+   - /readyz Redis PING check
+
+8. HOW DOCKER NETWORKING WORKS
+   Explain:
+   - Why localhost does not work from within a Docker container to reach another container
+   - How Docker Compose internal DNS resolves container service names
+   - Why upstream values in routes.docker.yaml use http://user-service:4001 not http://localhost:4001
+   - The routex-net bridge network in docker-compose.yml
+   - How the gateway container resolves redis, user-service, chat-service
+   - host.docker.internal for development
+   - The difference between gateway.config.yaml (local dev) and gateway.docker.yaml (Docker)
+   - The difference between routes.yaml (local dev) and routes.docker.yaml (Docker)
+   - How ROUTEX_CONFIG_PATH and ROUTEX_ROUTES_PATH switch between environments
+
+9. HOW AUTHENTICATION WORKS
+   Cover each auth mode (public, jwt, api-key, any) including:
+   - What credentials are required
+   - Which file implements it
+   - How the JWT is decoded (header, payload, signature — three base64url segments)
+   - Cryptographic verification: HMAC-SHA256 for HS256, RSA-SHA256 for RS256
+   - Why alg: none is always rejected
+   - How exp, nbf, iss, aud, sub are validated
+   - How roles are extracted (roles array or role string in JWT payload)
+   - How RBAC works (requiredRoles: every role must be present)
+   - How API keys are compared (crypto.timingSafeEqual, constant-time)
+   - Which identity headers are injected into upstream requests
+   - Which client headers are unconditionally stripped (security boundary)
+   - What the anonymous auth context looks like on a public route
+
+10. HOW RESILIENCE WORKS
+    Explain:
+    - Circuit breaker state machine: CLOSED -> OPEN -> HALF_OPEN -> CLOSED
+    - What triggers OPEN (failureThreshold consecutive failures)
+    - What failure status codes count (configurable: default 502, 503, 504)
+    - HALF_OPEN probe behavior (halfOpenMaxRequests)
+    - Per-origin isolation (one circuit per upstream URL)
+    - How SingleFlight prevents stampede on cache miss
+    - How fail-open rate limiting preserves availability during Redis downtime
+    - How headersTimeoutMs > requestTimeoutMs prevents socket race conditions
+    - How graceful shutdown preserves in-flight requests
+
+11. HOW STREAMING WORKS
+    Explain:
+    - Why RouteX does not buffer full response bodies before forwarding
+    - How Undici streams response directly to client socket
+    - What backpressure means in this context
+    - Why heap growth is bounded regardless of response payload size
+    - The exception: when caching is enabled (body is buffered up to maxBodyBytes)
+    - How request upload bodies are also streamed upstream
+    - How WebSocket proxying works (RFC 6455 upgrade, tunnel)
+    - Connection pool keep-alive behavior
+
+12. HOW THE ENTIRE ARCHITECTURE FITS TOGETHER
+    Draw a full ASCII architecture diagram:
+    Client -> RouteX (Fastify + pipeline) -> Undici pool -> Upstream services
+                         |                        ^
+                         v                        |
+                       Redis              Circuit Breaker / Cache
+    Then explain how each component depends on the others.
+    Explain the startup sequence.
+    Explain the shutdown sequence.
+    Explain what a developer must provide and what RouteX provides.
+
+---
+
+INTERVIEW PREPARATION
+
+After the technical explanation, provide clear, accurate answers to these questions
+that a developer who built RouteX should be able to answer:
+
+- What is RouteX?
+- Why did you build a gateway instead of implementing these features in every service?
+- How does the request flow?
+- Why Redis?
+- Why Undici instead of Node.js built-in HTTP?
+- How does rate limiting work?
+- How does the circuit breaker work?
+- How do you prevent header spoofing?
+- How does streaming avoid full-payload buffering?
+- What happens when Redis goes down?
+- What happens when an upstream service goes down?
+- What happens when the client disconnects mid-stream?
+- How does the gateway scale?
+- What is SingleFlight and why does it matter?
+- How does authentication work without a database lookup?
+- How does the gateway enforce RBAC?
+- What is the difference between Tier-1 and Tier-2 rate limiting?
+- How does the cache key prevent query parameter order from causing cache misses?
+- How does graceful shutdown work?
+- What does /readyz check that /livez does not?
+
+For every answer, cite the specific file and function where the behavior is implemented.
+```
+
+---
+
+## Prompt 2 — Integrate RouteX Into My Existing Project
+
+Give this prompt to an AI coding agent from **inside your existing application's repository**. The agent will inspect your project, design the integration, modify the configuration, connect Docker networking, configure authentication, update your frontend, verify the result, and fix any problems it encounters.
+
+The agent should perform all changes autonomously. You should not need to manually edit any configuration file.
+
+```
+You are a senior platform engineer and implementation agent.
+
+Your task is to integrate the RouteX API Gateway into this existing application.
+RouteX is a production-grade Node.js/TypeScript API Gateway and reverse proxy.
+Repository: https://github.com/ankit18193/RouteX
+
+You must behave like an implementation engineer, not a documentation assistant.
+Do not tell the developer what to change. Actually inspect and modify the project.
+Do not stop after generating configuration. Build, start, test, fix, and verify.
+Do not leave the application in a broken intermediate state.
+Do not claim success without actually verifying it.
+
+---
+
+PHASE A — UNDERSTAND THE EXISTING APPLICATION
+
+Inspect the entire project before making any changes.
+
+Identify and document:
+- Frontend applications (React, Vue, Next.js, etc.) and their API base URL configuration
+- Backend services: names, ports, entrypoints, frameworks
+- All API routes exposed by each backend service
+- WebSocket endpoints (if any)
+- package.json files, npm scripts, and start commands
+- Dockerfiles and docker-compose.yml files
+- Existing environment files (.env, .env.example, .env.local, etc.)
+- Authentication implementation: JWT issuer, secret/key, algorithm, claims structure, roles
+- Existing API keys (if used)
+- Existing Redis (if present)
+- Internal service-to-service communication patterns
+- Existing reverse proxies (Nginx, Caddy, etc.)
+- Database connections
+
+Build a clear architecture map. Output it before proceeding.
+Do not modify anything in Phase A.
+
+---
+
+PHASE B — INSPECT ROUTEX
+
+Locate RouteX in this repository, or clone it alongside this project:
+  git clone https://github.com/ankit18193/RouteX.git
+
+Inspect these RouteX files before configuring anything:
+- src/config/schema.ts          (all valid configuration fields and constraints)
+- config/gateway.docker.yaml    (gateway config structure)
+- config/routes.docker.yaml     (route config structure)
+- config/gateway.config.yaml    (local dev structure)
+- config/routes.yaml            (local dev routes)
+- .env.example                  (required environment variables)
+- docker-compose.yml            (container topology)
+- package.json                  (available npm scripts)
+
+Only use configuration fields that actually exist in src/config/schema.ts.
+Do not invent route fields, gateway fields, or environment variables.
+
+Key RouteX facts to confirm from the schema:
+- Auth modes: public, jwt, api-key, any
+- Rate limit failure policies: fail-open, fail-closed
+- Circuit breaker fields: failureThreshold, resetTimeoutMs, halfOpenMaxRequests, failureStatusCodes
+- Cache fields: enabled, ttlSec, maxBodyBytes, varyBy, allowAuthenticated, respectCacheControl
+- Timeout fields: connectTimeoutMs, responseTimeoutMs
+- Either upstream (single) or upstreams (array) must be provided per route
+- Environment variables that RouteX reads: PORT, HOST, LOG_LEVEL, LOG_FORMAT,
+  ROUTEX_CONFIG_PATH, ROUTEX_ROUTES_PATH, REDIS_HOST, REDIS_PORT,
+  REDIS_PASSWORD, JWT_HS256_SECRET
+- Health endpoints: /livez (liveness), /readyz (readiness + Redis ping), /healthz (liveness alias)
+- Default gateway port: 8080
+- Docker service name for Redis in docker-compose: redis
+- Docker network name: routex-net
+
+---
+
+PHASE C — DESIGN THE INTEGRATION
+
+Using the application's real service names, ports, and routes:
+
+1. Create a routing map:
+   /api/<path> -> http://<container-name>:<port>
+   Use the application's actual container names and ports.
+   Do not invent names or ports.
+
+2. Decide authentication mode per route:
+   - Public endpoints (login, signup, health): mode: public
+   - JWT-protected endpoints: mode: jwt
+   - Admin endpoints: mode: jwt with requiredRoles
+   - API key endpoints: mode: api-key
+   Base this on the application's EXISTING authentication implementation.
+
+3. Decide which routes need:
+   - Rate limiting (all public endpoints minimum)
+   - Caching (safe GET endpoints with low change frequency)
+   - Circuit breakers (all production upstream routes)
+   - Timeout values (based on expected upstream latency)
+
+4. If WebSocket endpoints exist, determine if they should route through RouteX.
+   RouteX supports WebSocket proxying only when websocket: true is set on a route.
+   Only configure this if it is actually needed and supported.
+
+5. Determine whether the frontend's API base URL needs to change.
+   If frontend currently calls http://localhost:<port> directly,
+   it should call http://localhost:8080 (RouteX) after integration.
+
+Document the complete integration design before proceeding.
+
+---
+
+PHASE D — MODIFY ROUTEX CONFIGURATION
+
+Edit config/routes.docker.yaml with all routes for the application.
+
+For each route, include only schema-valid fields:
+  id: unique_route_id
+  pathPrefix: /api/v1/resource
+  upstream: http://<container-name>:<port>
+  stripPrefix: false
+  methods: [GET, POST, PUT, PATCH, DELETE]
+  auth:
+    mode: public|jwt|api-key|any
+    requiredRoles: []
+  rateLimit:
+    enabled: true
+    windowSec: 60
+    limit: 100
+    failurePolicy: fail-open
+  cache:
+    enabled: false
+  circuitBreaker:
+    enabled: true
+    failureThreshold: 5
+    resetTimeoutMs: 10000
+    halfOpenMaxRequests: 2
+    failureStatusCodes: [500, 502, 503, 504]
+  timeouts:
+    connectTimeoutMs: 2000
+    responseTimeoutMs: 5000
+
+Edit config/gateway.docker.yaml if needed (timeouts, trusted proxies, log level).
+Do not hardcode JWT secrets in YAML. Use hs256SecretEnv: JWT_HS256_SECRET instead.
+
+---
+
+PHASE E — MODIFY DOCKER CONFIGURATION
+
+If the application uses Docker Compose:
+
+1. Add RouteX to docker-compose.yml:
+   routex-gateway:
+     build:
+       context: ./RouteX
+       dockerfile: Dockerfile
+     container_name: routex-gateway
+     restart: unless-stopped
+     environment:
+       - PORT=8080
+       - HOST=0.0.0.0
+       - REDIS_HOST=redis
+       - REDIS_PORT=6379
+       - ROUTEX_CONFIG_PATH=config/gateway.docker.yaml
+       - ROUTEX_ROUTES_PATH=config/routes.docker.yaml
+       - LOG_LEVEL=info
+       - LOG_FORMAT=json
+     ports:
+       - "8080:8080"
+     depends_on:
+       redis:
+         condition: service_healthy
+     healthcheck:
+       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:8080/livez"]
+       interval: 5s
+       timeout: 3s
+       retries: 5
+     networks:
+       - <application-network>
+
+2. If Redis does not already exist in docker-compose.yml, add it:
+   redis:
+     image: redis:7-alpine
+     container_name: routex-redis
+     restart: unless-stopped
+     healthcheck:
+       test: ["CMD", "redis-cli", "ping"]
+       interval: 5s
+       timeout: 3s
+       retries: 5
+     networks:
+       - <application-network>
+
+3. Ensure RouteX is on the same Docker network as all backend services it routes to.
+   Use the application's existing network name, not a new one.
+
+4. CRITICAL: Never use localhost as an upstream URL inside Docker.
+   Always use the Docker service name: http://user-service:4001
+
+5. Do not expose backend service ports externally if they should only be
+   accessible via RouteX. Remove or restrict host port mappings where appropriate.
+
+6. Do not break any existing services.
+
+---
+
+PHASE F — ENVIRONMENT CONFIGURATION
+
+Inspect the application's .env.example or equivalent.
+
+Add ONLY these RouteX variables (confirm each exists in RouteX's actual implementation):
+
+  # RouteX Gateway
+  ROUTEX_CONFIG_PATH=config/gateway.docker.yaml
+  ROUTEX_ROUTES_PATH=config/routes.docker.yaml
+  REDIS_HOST=redis
+  REDIS_PORT=6379
+  REDIS_PASSWORD=
+  JWT_HS256_SECRET=<use-the-application-existing-jwt-secret-or-a-strong-placeholder>
+
+Update .env.example (or equivalent template). Do not commit real secrets.
+Do not overwrite existing environment variables.
+If the application already defines REDIS_HOST or JWT_SECRET, reconcile carefully.
+
+---
+
+PHASE G — AUTHENTICATION INTEGRATION
+
+Inspect the existing authentication implementation:
+- What JWT library does the application use?
+- What algorithm (HS256, RS256)?
+- What is the secret or public key?
+- What claims does the token carry (sub, roles, tier, exp, iss, aud)?
+- What is the token lifetime?
+
+Configure RouteX's gateway.docker.yaml auth section to match:
+  auth:
+    jwt:
+      enabled: true
+      algorithms: ["HS256"]       # match the application's algorithm
+      hs256SecretEnv: JWT_HS256_SECRET   # env var, not inline secret
+      issuer: "..."               # match application's iss claim (if set)
+      audience: "..."             # match application's aud claim (if set)
+
+Note: RouteX extracts user identity from JWT claims:
+  - sub -> x-user-id
+  - roles or role -> x-user-roles
+  - tier -> used for rate limit tier selection
+
+Ensure the application's JWT tokens include a sub claim.
+If not, document the gap clearly and do not force a change without developer approval.
+
+Route-level auth: configure routes in routes.docker.yaml accordingly:
+  - Login / signup / health -> mode: public
+  - User-facing authenticated routes -> mode: jwt
+  - Admin routes -> mode: jwt + requiredRoles: ["admin"]
+  - API key routes -> mode: api-key
+
+Verify that the following headers will be stripped from client requests and
+injected with verified values by RouteX before upstream dispatch:
+  x-user-id, x-user-roles, x-auth-type, x-gateway-auth-status
+
+If backend services currently read x-user-id from requests, they should continue
+to do so — RouteX will inject the verified value. No changes to backend services
+are needed unless they previously trusted client-supplied headers.
+
+---
+
+PHASE H — FRONTEND INTEGRATION
+
+Locate frontend API configuration:
+- Environment files (.env, .env.local, config files)
+- API base URL constants
+- Axios/fetch base URL configuration
+- API client setup files
+
+If the frontend currently calls backend services directly on port 4001, 4002, etc.:
+Update API_BASE_URL (or equivalent) to http://localhost:8080 (RouteX).
+
+If the frontend is in Docker and calls backend containers directly:
+Update to http://routex-gateway:8080 (or the correct container name).
+
+Do not blindly replace all URLs. Understand which requests go to which service
+and confirm the corresponding route is configured in routes.docker.yaml.
+
+---
+
+PHASE I — REDIS INTEGRATION
+
+Determine whether the application already uses Redis:
+
+- If yes: check whether RouteX can share it safely.
+  RouteX uses key prefix routex: by default (configurable in gateway.docker.yaml).
+  If the application uses different key namespaces, sharing is safe.
+  If key conflicts are possible, use a dedicated Redis instance for RouteX.
+
+- If no: add redis:7-alpine to docker-compose.yml as described in Phase E.
+
+Set REDIS_HOST and REDIS_PORT in the environment to point to the correct instance.
+If Redis requires a password, set REDIS_PASSWORD.
+
+---
+
+PHASE J — START THE SYSTEM
+
+Using the project's actual commands:
+
+1. If Docker Compose is the deployment mechanism:
+   docker compose up --build -d
+
+2. If the project uses separate start scripts:
+   Check package.json for the correct start commands.
+   Start Redis, then RouteX, then verify with health probes.
+
+Do not assume commands. Read package.json and Docker configuration first.
+
+---
+
+PHASE K — VERIFY THE INTEGRATION
+
+Do not stop after modifying configuration. Actually verify.
+
+Run each of the following checks and report the result:
+
+1. docker compose ps
+   -> All containers showing Up (healthy)
+
+2. curl -s http://localhost:8080/livez | jq
+   -> status: ok
+
+3. curl -s http://localhost:8080/readyz | jq
+   -> status: ok, redis: ok
+
+4. Test a public route (no auth required):
+   curl -i http://localhost:8080/<public-endpoint>
+   -> 200 OK, x-request-id header present
+
+5. Test a JWT-protected route without a token:
+   curl -i http://localhost:8080/<protected-endpoint>
+   -> 401 Unauthorized
+
+6. Test a JWT-protected route with a valid token:
+   curl -i -H "Authorization: Bearer <valid-token>" http://localhost:8080/<protected-endpoint>
+   -> 200 OK, x-ratelimit-limit header present
+
+7. Test with an expired or tampered JWT:
+   -> 401 Unauthorized
+
+8. Test rate limiting by sending rapid requests:
+   -> 429 Too Many Requests on limit breach, x-ratelimit-remaining in headers
+
+9. Test cache (if enabled on a route):
+   First request: X-Cache: MISS
+   Second request (same URL within TTL): X-Cache: HIT
+
+10. Check backend service logs to verify:
+    - x-user-id header is present on authenticated requests
+    - x-gateway-forwarded-by: routex header is present
+    - x-request-id matches the id in the client response
+
+11. Verify the frontend can reach its API via RouteX.
+    Load the frontend and perform an authenticated action.
+    Confirm the action succeeds end-to-end.
+
+12. Verify that existing functionality not routed through RouteX is unaffected.
+
+---
+
+PHASE L — FIX PROBLEMS AUTONOMOUSLY
+
+If any verification step fails:
+
+1. Run docker compose logs <service-name> to identify the root cause.
+2. Fix the configuration or integration issue.
+3. Restart affected services: docker compose restart <service-name>
+4. Re-run the failed verification step.
+5. Continue until all checks pass.
+
+Common issues to diagnose:
+- 502 BAD_GATEWAY: upstream URL uses localhost instead of container service name
+- 401 UNAUTHORIZED: JWT secret mismatch between application and RouteX
+- redis: down in /readyz: REDIS_HOST not set to the correct service name
+- Route not matching: pathPrefix wrong or trailing slash present
+- Container not on correct network: run docker network inspect <network>
+
+Do not ask the developer to manually fix something if you can fix it yourself.
+Do not leave the application in a broken intermediate state.
+
+---
+
+PHASE M — FINAL SECURITY REVIEW
+
+Before finishing, verify:
+
+- .env is in .gitignore and not committed
+- No real secrets appear in YAML configuration files or docker-compose.yml
+- JWT_HS256_SECRET is set only in .env (not in gateway.docker.yaml inline)
+- Internal backend services are not unnecessarily exposed on host ports
+- Redis is not publicly exposed unless required
+- trustedProxies in gateway.docker.yaml includes only your actual load balancer CIDRs
+- requiredRoles is configured on admin/privileged routes
+- cache.allowAuthenticated is only true where intentional data sharing is acceptable
+- failurePolicy on login/payment routes is fail-closed where strict quotas are needed
+
+---
+
+PHASE N — FINAL REPORT
+
+Provide a structured report:
+
+1. Original application architecture (before RouteX)
+2. New architecture with RouteX (ASCII diagram)
+3. Files changed and what was changed in each
+4. Route configuration summary (id, pathPrefix, upstream, auth mode per route)
+5. Authentication integration summary
+6. Redis integration summary
+7. Docker changes summary
+8. Frontend changes summary
+9. Commands used to start the system
+10. Verification results (pass/fail per check)
+11. Any limitations or manual steps still required (with clear explanation of why)
+
+End with the final architecture diagram:
+
+  Client / Frontend
+          |
+          v
+     RouteX Gateway :8080
+          |
+     +----+----+----+
+     |         |    |
+     v         v    v
+  Service A  Srv B  Srv C
+     |               |
+     v               v
+  Database          Redis
+
+And conclude with:
+  RouteX is now integrated as the application's API gateway layer.
 ```
 
 ---
